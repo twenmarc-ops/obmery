@@ -8771,7 +8771,13 @@ axisInit();
 <script>
 /* ================================================ Экспорт в DXF (AutoCAD)
    Добавлено отдельно от основного кода приложения: читает подложку (П) и
-   пишет DXF R12 в кодировке Windows-1251 — его открывает любой AutoCAD.
+   пишет DXF 2000 (AC1015) в кодировке Windows-1251.
+
+   Выгружаются ДВА файла:
+   * «имя.dxf» — линии, размеры, маркеры, помещения;
+   * «имя_подложка.png/jpg» — картинка плана. DXF ссылается на неё по имени,
+     поэтому оба файла должны лежать в одной папке. Тогда AutoCAD сам
+     подкладывает план под линии точно по месту и масштабу.
 
    Координаты:
    * если в подложке есть привязка vor.cad_ref (две точки с координатами
@@ -8781,6 +8787,7 @@ axisInit();
      плана в точке 0,0. Совместить с чертежом: команда ВЫРОВНЯТЬ (ALIGN).
 
    Слои:
+   OBMER_PODLOZHKA    картинка плана (можно заморозить или удалить)
    OBMER_RAZMERY      размерные линии и их значения (зелёные — измерено, красные — нет)
    OBMER_MARKERY      окна, двери, проёмы, высоты, заметки — кружок и подписи
    OBMER_POMESHCHENIYA контуры помещений с номером и названием
@@ -8789,7 +8796,7 @@ axisInit();
 (function(){
   "use strict";
 
-  // ---------- кодировка 1251 (кириллица в DXF R12)
+  // ---------- кодировка 1251 (кириллица в DXF 2000)
   const CP = {"Ё":0xA8,"ё":0xB8,"№":0xB9,"«":0xAB,"»":0xBB,"—":0x97,"–":0x96,
               "°":0xB0,"±":0xB1,"…":0x85,"“":0x93,"”":0x94,"‘":0x91,"’":0x92};
   function вБайты(текст){
@@ -8804,6 +8811,11 @@ axisInit();
       else out[n++] = 0x3F; // «?»
     }
     return out.slice(0, n);
+  }
+  // имя файла картинки должно в точности совпасть в DXF и на диске —
+  // оставляем только то, что точно переживёт 1251, Windows и Telegram
+  function чистоеИмя(s){
+    return String(s).replace(/[^0-9A-Za-zА-Яа-яЁё _\-.()№]/g, "_").replace(/\s+/g, " ").trim() || "obmer";
   }
 
   // ---------- геометрия: пиксели подложки -> мм чертежа
@@ -8820,51 +8832,61 @@ axisInit();
       if (den > 0) {
         const a = [(dz[0]*dw[0] + dz[1]*dw[1]) / den, (dz[1]*dw[0] - dz[0]*dw[1]) / den];
         const b = [z1[0] - (a[0]*w1[0] - a[1]*w1[1]), z1[1] - (a[0]*w1[1] + a[1]*w1[0])];
-        return {привязка: true, мм: Math.hypot(a[0], a[1]),
+        // единицы исходного чертежа (если подложка сделана из DXF не в мм)
+        const ед = р.insunits !== undefined ? +р.insunits : 4;
+        const вМм = {0:1, 1:25.4, 2:304.8, 4:1, 5:10, 6:1000, 14:100}[ед] || 1;
+        return {привязка: true, мм: Math.hypot(a[0], a[1]), ед, вМм,
           т: (x, y) => [a[0]*x - a[1]*(-y) + b[0], a[0]*(-y) + a[1]*x + b[1]]};
       }
     }
     const H = П.высота || 0;
-    return {привязка: false, мм: k, т: (x, y) => [x*k, (H - y)*k]};
+    return {привязка: false, мм: k, ед: 4, вМм: 1, т: (x, y) => [x*k, (H - y)*k]};
   }
 
-  // ---------- запись DXF
+  // ---------- запись DXF 2000: у каждого объекта свой номер (handle)
   function Dxf(){
     const s = [];
+    let след = 0x20;
     const g = (код, знач) => { s.push(String(код)); s.push(String(знач)); };
     const ч = v => (Math.round(v * 1000) / 1000).toString();
-    return {
-      g, ч,
+    const номер = () => (след++).toString(16).toUpperCase();
+    const d = {
+      g, ч, номер, строки: s, МП: "",   // МП — номер записи *Model_Space
+      начало(тип, слой, цвет){
+        g(0, тип); g(5, номер()); g(330, d.МП); g(100, "AcDbEntity"); g(8, слой);
+        if (цвет) g(62, цвет);
+      },
       линия(слой, цвет, a, b){
-        g(0,"LINE"); g(8,слой); if (цвет) g(62,цвет);
+        d.начало("LINE", слой, цвет); g(100, "AcDbLine");
         g(10,ч(a[0])); g(20,ч(a[1])); g(30,0); g(11,ч(b[0])); g(21,ч(b[1])); g(31,0);
       },
       круг(слой, цвет, c, r){
-        g(0,"CIRCLE"); g(8,слой); if (цвет) g(62,цвет);
+        d.начало("CIRCLE", слой, цвет); g(100, "AcDbCircle");
         g(10,ч(c[0])); g(20,ч(c[1])); g(30,0); g(40,ч(r));
       },
       полилиния(слой, цвет, точки, замкнута){
         if (точки.length < 2) return;
-        g(0,"POLYLINE"); g(8,слой); if (цвет) g(62,цвет); g(66,1);
-        g(10,0); g(20,0); g(30,0); g(70, замкнута ? 1 : 0);
-        for (const p of точки) { g(0,"VERTEX"); g(8,слой); g(10,ч(p[0])); g(20,ч(p[1])); g(30,0); }
-        g(0,"SEQEND"); g(8,слой);
+        d.начало("LWPOLYLINE", слой, цвет); g(100, "AcDbPolyline");
+        g(90, точки.length); g(70, замкнута ? 1 : 0); g(43, 0);
+        for (const p of точки) { g(10,ч(p[0])); g(20,ч(p[1])); }
       },
       // выравнивание: 0 — от левого края, 4 — по центру (середине)
       текст(слой, цвет, p, h, текст, угол, поЦентру){
         текст = String(текст).replace(/[\r\n]+/g, " ").trim();
         if (!текст) return;
-        g(0,"TEXT"); g(8,слой); if (цвет) g(62,цвет);
+        d.начало("TEXT", слой, цвет); g(100, "AcDbText");
         g(10,ч(p[0])); g(20,ч(p[1])); g(30,0); g(40,ч(h)); g(1,текст);
         if (угол) g(50,ч(угол));
         g(7,"OBMER");
         if (поЦентру) { g(72,4); g(11,ч(p[0])); g(21,ч(p[1])); g(31,0); }
-      },
-      строки: s
+        g(100, "AcDbText");
+      }
     };
+    return d;
   }
 
-  const СЛОИ = [["OBMER_RAZMERY",5],["OBMER_MARKERY",30],["OBMER_POMESHCHENIYA",4],["OBMER_ESKIZ",8]];
+  const СЛОИ = [["OBMER_PODLOZHKA",7],["OBMER_RAZMERY",5],["OBMER_MARKERY",30],
+                ["OBMER_POMESHCHENIYA",4],["OBMER_ESKIZ",8]];
   const ЦВЕТ_ЭСКИЗА = {"стена":7,"перегородка":8,"окно":4,"дверь":30,"линия":1};
 
   function значение(v){ return v === null || v === undefined ? "" : String(v).trim(); }
@@ -8878,34 +8900,154 @@ axisInit();
     return гр;
   }
 
-  function собратьDXF(){
-    const {т, мм, привязка} = преобразование();
-    const ширинаММ = (П.ширина || 2000) * мм;
-    const h = Math.max(50, Math.min(400, Math.round(ширинаММ / 150 / 10) * 10)); // высота текста, мм
-    const d = Dxf(), g = d.g;
-    const счёт = {размеры:0, маркеры:0, помещения:0, линии:0};
+  // картинка плана из подложки: {байты, расширение} или null
+  function картинкаПлана(){
+    const url = П.картинкаДанные || "";
+    const m = /^data:image\/(png|jpe?g|bmp|gif|tiff?);base64,/i.exec(url);
+    if (!m) return null;
+    const bin = atob(url.slice(m[0].length));
+    const b = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+    const тип = m[1].toLowerCase();
+    return {байты: b, расширение: тип === "jpeg" ? "jpg" : тип, mime: "image/" + (тип === "jpg" ? "jpeg" : тип)};
+  }
 
-    // HEADER
+  function собратьDXF(имяКартинки){
+    const {т, мм, привязка, ед, вМм} = преобразование();
+    const W = П.ширина || 2000, H = П.высота || 1400;
+    const ширинаММ = W * мм * вМм;
+    // высота текста: 50…400 мм, в единицах чертежа
+    const h = Math.max(50, Math.min(400, Math.round(ширинаММ / 150 / 10) * 10)) / вМм;
+    const d = Dxf(), g = d.g, ч = d.ч;
+    const счёт = {размеры:0, маркеры:0, помещения:0, линии:0, подложка:false};
+
+    // номера служебных записей заранее — на них ссылаются друг из друга
+    const Н = {};
+    for (const k of ["корень","группы","картинки","растр","раскладки","стилиПечати","стильПечати",
+                     "tVPORT","tLTYPE","tLAYER","tSTYLE","tVIEW","tUCS","tAPPID","tDIMSTYLE","tBR",
+                     "МП","ЛП","блМП","конМП","блЛП","конЛП",
+                     "образ","определение","реактор"]) Н[k] = d.номер();
+    d.МП = Н.МП;
+
+    // углы плана на чертеже — для начального вида
+    const углы = [т(0,0), т(W,0), т(0,H), т(W,H)];
+    const xs = углы.map(p => p[0]), ys = углы.map(p => p[1]);
+    const мин = [Math.min(...xs), Math.min(...ys)], макс = [Math.max(...xs), Math.max(...ys)];
+    const центр = [(мин[0]+макс[0])/2, (мин[1]+макс[1])/2];
+    const высотаВида = Math.max(макс[1]-мин[1], (макс[0]-мин[0]) / 1.6) * 1.1 || 1000;
+
+    // ===== HEADER
     g(0,"SECTION"); g(2,"HEADER");
-    g(9,"$ACADVER"); g(1,"AC1009");
+    g(9,"$ACADVER"); g(1,"AC1015");
     g(9,"$DWGCODEPAGE"); g(3,"ANSI_1251");
-    g(9,"$INSUNITS"); g(70,4);
+    g(9,"$INSBASE"); g(10,0); g(20,0); g(30,0);
+    g(9,"$EXTMIN"); g(10,ч(мин[0])); g(20,ч(мин[1])); g(30,0);
+    g(9,"$EXTMAX"); g(10,ч(макс[0])); g(20,ч(макс[1])); g(30,0);
+    g(9,"$INSUNITS"); g(70,ед);
+    g(9,"$MEASUREMENT"); g(70,1);
+    const позицияСемени = d.строки.length + 3; // значение $HANDSEED допишем в конце
+    g(9,"$HANDSEED"); g(5,"0");
     g(0,"ENDSEC");
-    // TABLES
+
+    // ===== CLASSES (картинки в DXF — «пользовательские» объекты)
+    g(0,"SECTION"); g(2,"CLASSES");
+    for (const [имя, cpp, флаги, сущность] of [
+      ["IMAGEDEF","AcDbRasterImageDef",0,0],
+      ["IMAGEDEF_REACTOR","AcDbRasterImageDefReactor",1,0],
+      ["RASTERVARIABLES","AcDbRasterVariables",0,0],
+      ["IMAGE","AcDbRasterImage",127,1]]) {
+      g(0,"CLASS"); g(1,имя); g(2,cpp); g(3,"ISM"); g(90,флаги); g(280,0); g(281,сущность);
+    }
+    g(0,"ENDSEC");
+
+    // ===== TABLES
+    const таблица = (имя, н, кол) => { g(0,"TABLE"); g(2,имя); g(5,н); g(330,0); g(100,"AcDbSymbolTable"); g(70,кол); };
+    const запись = (тип, табл, подкласс) => { g(0,тип); g(5,d.номер()); g(330,табл); g(100,"AcDbSymbolTableRecord"); g(100,подкласс); };
     g(0,"SECTION"); g(2,"TABLES");
-    g(0,"TABLE"); g(2,"LTYPE"); g(70,1);
-    g(0,"LTYPE"); g(2,"CONTINUOUS"); g(70,0); g(3,"Solid line"); g(72,65); g(73,0); g(40,0);
+
+    таблица("VPORT", Н.tVPORT, 1);
+    запись("VPORT", Н.tVPORT, "AcDbViewportTableRecord");
+    g(2,"*Active"); g(70,0);
+    g(10,0); g(20,0); g(11,1); g(21,1); g(12,ч(центр[0])); g(22,ч(центр[1]));
+    g(13,0); g(23,0); g(14,10); g(24,10); g(15,10); g(25,10);
+    g(16,0); g(26,0); g(36,1); g(17,0); g(27,0); g(37,0);
+    g(40,ч(высотаВида)); g(41,1.6); g(42,50); g(43,0); g(44,0); g(50,0); g(51,0);
+    g(71,0); g(72,1000); g(73,1); g(74,3); g(75,0); g(76,0); g(77,0); g(78,0);
+    g(281,0); g(65,1); g(110,0); g(120,0); g(130,0); g(111,1); g(121,0); g(131,0);
+    g(112,0); g(122,1); g(132,0); g(79,0); g(146,0);
     g(0,"ENDTAB");
-    g(0,"TABLE"); g(2,"LAYER"); g(70,СЛОИ.length);
-    for (const [имя, цвет] of СЛОИ) { g(0,"LAYER"); g(2,имя); g(70,0); g(62,цвет); g(6,"CONTINUOUS"); }
+
+    таблица("LTYPE", Н.tLTYPE, 3);
+    for (const [имя, опис] of [["ByBlock",""],["ByLayer",""],["Continuous","Solid line"]]) {
+      запись("LTYPE", Н.tLTYPE, "AcDbLinetypeTableRecord");
+      g(2,имя); g(70,0); g(3,опис); g(72,65); g(73,0); g(40,0);
+    }
     g(0,"ENDTAB");
-    g(0,"TABLE"); g(2,"STYLE"); g(70,1);
-    g(0,"STYLE"); g(2,"OBMER"); g(70,0); g(40,0); g(41,1); g(50,0); g(71,0); g(42,h); g(3,"arial.ttf"); g(4,"");
+
+    таблица("LAYER", Н.tLAYER, СЛОИ.length + 1);
+    for (const [имя, цвет] of [["0",7], ...СЛОИ]) {
+      запись("LAYER", Н.tLAYER, "AcDbLayerTableRecord");
+      g(2,имя); g(70,0); g(62,цвет); g(6,"Continuous"); g(370,-3); g(390,Н.стильПечати);
+    }
+    g(0,"ENDTAB");
+
+    таблица("STYLE", Н.tSTYLE, 2);
+    for (const [имя, шрифт] of [["Standard","arial.ttf"],["OBMER","arial.ttf"]]) {
+      запись("STYLE", Н.tSTYLE, "AcDbTextStyleTableRecord");
+      g(2,имя); g(70,0); g(40,0); g(41,1); g(50,0); g(71,0); g(42, имя === "OBMER" ? h : 2.5); g(3,шрифт); g(4,"");
+    }
+    g(0,"ENDTAB");
+
+    таблица("VIEW", Н.tVIEW, 0); g(0,"ENDTAB");
+    таблица("UCS", Н.tUCS, 0); g(0,"ENDTAB");
+
+    таблица("APPID", Н.tAPPID, 1);
+    запись("APPID", Н.tAPPID, "AcDbRegAppTableRecord"); g(2,"ACAD"); g(70,0);
+    g(0,"ENDTAB");
+
+    g(0,"TABLE"); g(2,"DIMSTYLE"); g(5,Н.tDIMSTYLE); g(330,0); g(100,"AcDbSymbolTable"); g(70,1);
+    g(100,"AcDbDimStyleTable"); g(71,0);
+    g(0,"DIMSTYLE"); g(105,d.номер()); g(330,Н.tDIMSTYLE); g(100,"AcDbSymbolTableRecord");
+    g(100,"AcDbDimStyleTableRecord"); g(2,"Standard"); g(70,0);
+    g(0,"ENDTAB");
+
+    таблица("BLOCK_RECORD", Н.tBR, 2);
+    for (const [имя, н] of [["*Model_Space",Н.МП],["*Paper_Space",Н.ЛП]]) {
+      g(0,"BLOCK_RECORD"); g(5,н); g(330,Н.tBR); g(100,"AcDbSymbolTableRecord");
+      g(100,"AcDbBlockTableRecord"); g(2,имя);
+    }
     g(0,"ENDTAB");
     g(0,"ENDSEC");
 
-    // ENTITIES
+    // ===== BLOCKS
+    g(0,"SECTION"); g(2,"BLOCKS");
+    for (const [имя, зап, нач, кон, лист] of [["*Model_Space",Н.МП,Н.блМП,Н.конМП,0],
+                                             ["*Paper_Space",Н.ЛП,Н.блЛП,Н.конЛП,1]]) {
+      g(0,"BLOCK"); g(5,нач); g(330,зап); g(100,"AcDbEntity"); if (лист) g(67,1); g(8,"0");
+      g(100,"AcDbBlockBegin"); g(2,имя); g(70,0); g(10,0); g(20,0); g(30,0); g(3,имя); g(1,"");
+      g(0,"ENDBLK"); g(5,кон); g(330,зап); g(100,"AcDbEntity"); if (лист) g(67,1); g(8,"0");
+      g(100,"AcDbBlockEnd");
+    }
+    g(0,"ENDSEC");
+
+    // ===== ENTITIES
     g(0,"SECTION"); g(2,"ENTITIES");
+
+    // подложка — первой, чтобы лежала под всеми линиями
+    if (имяКартинки) {
+      const o = т(0, H), u = т(1, H), v = т(0, H - 1);
+      g(0,"IMAGE"); g(5,Н.образ); g(330,Н.МП); g(100,"AcDbEntity"); g(8,"OBMER_PODLOZHKA");
+      g(100,"AcDbRasterImage"); g(90,0);
+      g(10,ч(o[0])); g(20,ч(o[1])); g(30,0);
+      g(11,(u[0]-o[0]).toPrecision(12)); g(21,(u[1]-o[1]).toPrecision(12)); g(31,0);
+      g(12,(v[0]-o[0]).toPrecision(12)); g(22,(v[1]-o[1]).toPrecision(12)); g(32,0);
+      g(13,W); g(23,H);
+      g(340,Н.определение);
+      g(70,7); g(280,0); g(281,50); g(282,50); g(283,0);
+      g(360,Н.реактор);
+      g(71,1); g(91,2); g(14,-0.5); g(24,-0.5); g(14,W-0.5); g(24,H-0.5);
+      счёт.подложка = true;
+    }
 
     for (const s of (П.рисунок || [])) {
       const pts = s.points.map(p => т(p[0], p[1]));
@@ -8953,30 +9095,71 @@ axisInit();
         счёт.маркеры++;
       }
     }
+    g(0,"ENDSEC");
 
+    // ===== OBJECTS (словари; для картинки — её описание)
+    g(0,"SECTION"); g(2,"OBJECTS");
+    g(0,"DICTIONARY"); g(5,Н.корень); g(330,0); g(100,"AcDbDictionary"); g(281,1);
+    g(3,"ACAD_GROUP"); g(350,Н.группы);
+    g(3,"ACAD_IMAGE_DICT"); g(350,Н.картинки);
+    g(3,"ACAD_IMAGE_VARS"); g(350,Н.растр);
+    g(3,"ACAD_PLOTSTYLENAME"); g(350,Н.стилиПечати);
+    g(0,"ACDBDICTIONARYWDFLT"); g(5,Н.стилиПечати); g(330,Н.корень); g(100,"AcDbDictionary"); g(281,1);
+    g(3,"Normal"); g(350,Н.стильПечати); g(100,"AcDbDictionaryWithDefault"); g(340,Н.стильПечати);
+    g(0,"ACDBPLACEHOLDER"); g(5,Н.стильПечати); g(330,Н.стилиПечати);
+    g(0,"DICTIONARY"); g(5,Н.группы); g(330,Н.корень); g(100,"AcDbDictionary"); g(281,1);
+    g(0,"DICTIONARY"); g(5,Н.картинки); g(330,Н.корень); g(100,"AcDbDictionary"); g(281,1);
+    if (имяКартинки) { g(3, имяКартинки.replace(/\.[^.]+$/, "")); g(350,Н.определение); }
+    g(0,"RASTERVARIABLES"); g(5,Н.растр);
+    g(102,"{ACAD_REACTORS"); g(330,Н.корень); g(102,"}");
+    g(330,Н.корень); g(100,"AcDbRasterVariables"); g(90,0); g(70,1); g(71,1); g(72,0);
+    if (имяКартинки) {
+      g(0,"IMAGEDEF"); g(5,Н.определение);
+      g(102,"{ACAD_REACTORS"); g(330,Н.картинки); g(330,Н.реактор); g(102,"}");
+      g(330,Н.картинки); g(100,"AcDbRasterImageDef"); g(90,0);
+      g(1, имяКартинки); g(10,W); g(20,H); g(11,1); g(21,1); g(280,1); g(281,0);
+      g(0,"IMAGEDEF_REACTOR"); g(5,Н.реактор); g(330,Н.образ);
+      g(100,"AcDbRasterImageDefReactor"); g(90,2); g(330,Н.образ);
+    }
     g(0,"ENDSEC");
     g(0,"EOF");
+
+    d.строки[позицияСемени] = d.номер();
     return {байты: вБайты(d.строки.join("\r\n") + "\r\n"), счёт, привязка};
   }
 
   async function выгрузитьDXF(){
     закрытьМеню();
     if (!П.сырой) return сказать("Сначала откройте подложку");
-    const {байты, счёт, привязка} = собратьDXF();
-    const имя = корень(П.имя) + ".dxf";
+    const база = чистоеИмя(корень(П.имя));
+    // подложка нарисована из чертежа DXF: план уже есть в DWG линиями,
+    // картинка только закрыла бы его — выгружаем одни замеры
+    const р = (П.сырой.vor || {}).cad_ref;
+    const изЧертежа = !!(р && р.from_dxf);
+    const картинка = изЧертежа ? null : картинкаПлана();
+    const имяКартинки = картинка ? база + "_подложка." + картинка.расширение : "";
+    const {байты, счёт, привязка} = собратьDXF(имяКартинки);
+    const файлы = [new File([байты], база + ".dxf", {type: "application/octet-stream"})];
+    if (картинка) файлы.push(new File([картинка.байты], имяКартинки, {type: картинка.mime}));
     const итог = "размеров " + счёт.размеры + ", маркеров " + счёт.маркеры +
                  ", помещений " + счёт.помещения + ", линий " + счёт.линии +
-                 (привязка ? ". Привязка к чертежу есть" : ". Без привязки — совместите командой ВЫРОВНЯТЬ");
-    const файл = new File([байты], имя, {type: "application/octet-stream"});
-    if (navigator.canShare && navigator.canShare({files: [файл]})) {
-      try { await navigator.share({files: [файл], title: имя}); сказать("DXF отправлен: " + итог); return; }
+                 (картинка ? ". Файлов два — DXF и картинка плана, держите их в одной папке" : "") +
+                 (изЧертежа ? ". Вставьте этот DXF в исходный чертёж в точку 0,0 — замеры лягут на место"
+                  : привязка ? ". Привязка к чертежу есть" : ". Без привязки — совместите командой ВЫРОВНЯТЬ");
+    // На телефоне — «Поделиться» (Telegram, Файлы); на компьютере — обычное скачивание
+    const телефон = matchMedia("(pointer: coarse)").matches;
+    if (телефон && navigator.canShare && navigator.canShare({files: файлы})) {
+      try { await navigator.share({files: файлы, title: база}); сказать("Отправлено: " + итог); return; }
       catch (err) { if (err && err.name === "AbortError") return; }
     }
-    const url = URL.createObjectURL(new Blob([байты], {type: "application/octet-stream"}));
-    const a = document.createElement("a");
-    a.href = url; a.download = имя; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-    сказать("DXF сохранён: " + итог);
+    for (const ф of файлы) {
+      const url = URL.createObjectURL(ф);
+      const a = document.createElement("a");
+      a.href = url; a.download = ф.name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      await new Promise(r => setTimeout(r, 400));
+    }
+    сказать("Сохранено: " + итог);
   }
 
   // кнопка в меню — сразу после «Экспорт трасс в CSV»
@@ -8990,6 +9173,7 @@ axisInit();
     рядом.after(b);
   }
   window.собратьDXF = собратьDXF; // для проверки
+  window.картинкаПланаDXF = картинкаПлана;
 })();
 </script>
 <script>
