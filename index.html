@@ -9128,6 +9128,42 @@ axisInit();
     return {байты: вБайты(d.строки.join("\r\n") + "\r\n"), счёт, привязка};
   }
 
+  // ---------- ZIP без сжатия: DXF и картинка одним файлом.
+  // Telegram отправляет картинки как «фото» — сжимает и переименовывает,
+  // и AutoCAD её потом не находит. Архив уходит обычным файлом, имена внутри целы.
+  const CRC = (() => { const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t; })();
+  function crc32(b){ let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function zip(файлы){ // [{имя, байты}]
+    const enc = new TextEncoder(), части = [], центр = [];
+    const d = new Date();
+    const время = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const дата = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    let смещение = 0;
+    for (const ф of файлы) {
+      const имя = enc.encode(ф.имя), crc = crc32(ф.байты), n = ф.байты.length;
+      const з = new DataView(new ArrayBuffer(30));
+      з.setUint32(0, 0x04034b50, true); з.setUint16(4, 20, true); з.setUint16(6, 0x0800, true);
+      з.setUint16(8, 0, true); з.setUint16(10, время, true); з.setUint16(12, дата, true);
+      з.setUint32(14, crc, true); з.setUint32(18, n, true); з.setUint32(22, n, true);
+      з.setUint16(26, имя.length, true); з.setUint16(28, 0, true);
+      части.push(new Uint8Array(з.buffer), имя, ф.байты);
+      const ц = new DataView(new ArrayBuffer(46));
+      ц.setUint32(0, 0x02014b50, true); ц.setUint16(4, 20, true); ц.setUint16(6, 20, true);
+      ц.setUint16(8, 0x0800, true); ц.setUint16(10, 0, true); ц.setUint16(12, время, true); ц.setUint16(14, дата, true);
+      ц.setUint32(16, crc, true); ц.setUint32(20, n, true); ц.setUint32(24, n, true);
+      ц.setUint16(28, имя.length, true); ц.setUint32(42, смещение, true);
+      центр.push(new Uint8Array(ц.buffer), имя);
+      смещение += 30 + имя.length + n;
+    }
+    const размерЦентра = центр.reduce((s, x) => s + x.length, 0);
+    const к = new DataView(new ArrayBuffer(22));
+    к.setUint32(0, 0x06054b50, true); к.setUint16(8, файлы.length, true); к.setUint16(10, файлы.length, true);
+    к.setUint32(12, размерЦентра, true); к.setUint32(16, смещение, true);
+    return new Blob([...части, ...центр, new Uint8Array(к.buffer)], {type: "application/zip"});
+  }
+
   // сКартинкой: для подложки из DXF — по отдельной кнопке меню
   async function выгрузитьDXF(сКартинкой){
     закрытьМеню();
@@ -9140,11 +9176,13 @@ axisInit();
     const картинка = изЧертежа ? null : картинкаПлана();
     const имяКартинки = картинка ? база + "_подложка." + картинка.расширение : "";
     const {байты, счёт, привязка} = собратьDXF(имяКартинки);
-    const файлы = [new File([байты], база + ".dxf", {type: "application/octet-stream"})];
-    if (картинка) файлы.push(new File([картинка.байты], имяКартинки, {type: картинка.mime}));
+    const файлы = картинка
+      ? [new File([zip([{имя: база + ".dxf", байты}, {имя: имяКартинки, байты: картинка.байты}])],
+                  база + ".zip", {type: "application/zip"})]
+      : [new File([байты], база + ".dxf", {type: "application/octet-stream"})];
     const итог = "размеров " + счёт.размеры + ", маркеров " + счёт.маркеры +
                  ", помещений " + счёт.помещения + ", линий " + счёт.линии +
-                 (картинка ? ". Файлов два — DXF и картинка плана, держите их в одной папке" : "") +
+                 (картинка ? ". Это ZIP-архив: распакуйте его и откройте DXF — картинка плана лежит рядом" : "") +
                  (изЧертежа ? ". Вставьте этот DXF в исходный чертёж в точку 0,0 — замеры лягут на место"
                   : привязка ? ". Привязка к чертежу есть" : ". Без привязки — совместите командой ВЫРОВНЯТЬ");
     // На телефоне — «Поделиться» (Telegram, Файлы); на компьютере — обычное скачивание
