@@ -9183,5 +9183,130 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
   navigator.serviceWorker.register("./sw.js").catch(function (e) { console.warn("SW:", e); });
 }
 </script>
+<script id="compact-ui">
+/* ================================================ Компактный вид для телефона
+   Больше места под план:
+   * вертикально — шапка в одну строку, «Замеры/Черчение» рядом с инструментами;
+   * горизонтально — инструменты столбиком слева, план на всю остальную ширину;
+   * кнопка «План на весь экран» в столбике масштаба — прячет шапку и инструменты
+     (нижняя строка со «Следующий» остаётся).
+   Только стили и одна кнопка: логику приложения не трогает.
+*/
+(function(){
+  "use strict";
+  const css = `
+/* ---------- телефон вертикально */
+@media (max-width:700px) and (min-height:521px) {
+  #приложение > header{flex-wrap:nowrap!important;gap:6px!important;padding:6px 8px!important;
+    padding-top:calc(6px + env(safe-area-inset-top))!important;}
+  #приложение .идентичность{width:auto!important;flex:1 1 auto!important;min-width:0!important;}
+  #приложение .знакПриложения,#приложение .надНазвание{display:none!important;}
+  #приложение header .название{font-size:14px!important;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #приложение .действия{width:auto!important;flex:0 0 auto!important;gap:1px!important;}
+  #приложение .действия .значок{width:36px!important;min-height:38px!important;}
+  #приложение #кПрибор{margin-left:0!important;padding:0 6px!important;width:auto!important;}
+  #приложение #кПрибор .подписьПрибора{display:none!important;}
+  #приложение #кСохранить{min-height:38px!important;padding:6px 10px!important;}
+  #приложение #кСохранить svg{display:block!important;}
+  #приложение #кСохранить span{display:none!important;}
+  #приложение #панельИнструментов{padding:4px 8px 5px!important;gap:6px!important;}
+  #приложение #группы{flex-direction:column!important;padding:2px!important;gap:1px!important;
+    width:auto!important;flex:0 0 auto!important;}
+  #приложение #группы button{flex:0 0 auto!important;min-height:25px!important;padding:2px 8px!important;font-size:11px!important;}
+  #приложение .полоса:not(.цвета){flex:1 1 0!important;min-width:0!important;}
+  #приложение .полоса:not(.цвета) button{min-height:48px!important;min-width:50px!important;padding:4px!important;gap:1px!important;}
+  #приложение .полоса:not(.цвета) button svg{width:20px!important;height:20px!important;}
+  #приложение .полоса.цвета button{min-height:30px!important;}
+  #приложение #строка{min-height:42px!important;padding:4px 8px!important;
+    padding-bottom:calc(4px + env(safe-area-inset-bottom))!important;}
+  #приложение #строка button{min-height:34px!important;}
+  #легендаПлана{display:none!important;}
+  #меню{top:calc(54px + env(safe-area-inset-top))!important;max-height:calc(100dvh - 110px)!important;}
+  #оформление,#окноПрибора{top:calc(58px + env(safe-area-inset-top))!important;}
+}
+/* ---------- телефон горизонтально: инструменты столбиком слева */
+@media (max-height:520px) and (orientation:landscape) {
+  #приложение{display:grid!important;grid-template-columns:auto minmax(0,1fr);
+    grid-template-rows:auto auto minmax(0,1fr) auto;}
+  #приложение > header{grid-column:1 / -1;grid-row:1;flex-wrap:nowrap!important;gap:8px!important;
+    padding:4px 10px!important;padding-top:calc(4px + env(safe-area-inset-top))!important;
+    padding-left:max(10px, env(safe-area-inset-left))!important;padding-right:max(10px, env(safe-area-inset-right))!important;}
+  #приложение > #вкладки{grid-column:1 / -1;grid-row:2;}
+  #приложение > #панельИнструментов{grid-column:1;grid-row:3;flex-direction:column!important;align-items:stretch!important;
+    flex-wrap:nowrap!important;padding:4px!important;padding-left:max(4px, env(safe-area-inset-left))!important;
+    gap:4px!important;min-height:0;overflow:hidden;border-right:1px solid var(--край);}
+  #приложение > #областьПлана{grid-column:2;grid-row:3;min-height:0;min-width:0;}
+  #приложение > #строка{grid-column:1 / -1;grid-row:4;min-height:38px!important;padding:3px 10px!important;
+    padding-bottom:calc(3px + env(safe-area-inset-bottom))!important;
+    padding-left:max(10px, env(safe-area-inset-left))!important;padding-right:max(10px, env(safe-area-inset-right))!important;}
+  #приложение #строка button{min-height:32px!important;}
+  #приложение .идентичность{width:auto!important;flex:1 1 auto!important;min-width:0!important;}
+  #приложение .знакПриложения,#приложение .надНазвание{display:none!important;}
+  #приложение header .название{font-size:14px!important;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #приложение .действия{width:auto!important;gap:2px!important;}
+  #приложение .действия .значок{width:38px!important;min-height:36px!important;}
+  #приложение #кСохранить{min-height:36px!important;padding:5px 12px!important;}
+  #приложение #кПрибор{margin-left:0!important;padding:0 8px!important;width:auto!important;min-height:36px!important;}
+  #приложение #кПрибор .подписьПрибора{display:none!important;}
+  #приложение .разделительДействий{display:none!important;}
+  #приложение #группы{flex-direction:column!important;padding:2px!important;gap:1px!important;}
+  #приложение #группы button{min-height:24px!important;padding:2px 6px!important;font-size:10.5px!important;}
+  #приложение .полоса{flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;
+    flex:1 1 0!important;min-height:0!important;gap:2px!important;}
+  #приложение .полоса:not(.цвета) button{min-height:44px!important;min-width:62px!important;padding:3px!important;gap:1px!important;}
+  #приложение .полоса:not(.цвета) button svg{width:19px!important;height:19px!important;}
+  #приложение .полоса:not(.цвета) button .имя{font-size:9.5px!important;}
+  #приложение .полоса.цвета{flex:0 0 auto!important;flex-direction:row!important;flex-wrap:wrap!important;
+    width:62px;overflow:visible!important;}
+  #приложение .полоса.цвета .подписьЦвета{display:none!important;}
+  #приложение .полоса.цвета button{min-height:26px!important;padding:2px 6px!important;}
+  #приложение .полоса.цвета button.ярлык.образец{width:26px!important;min-width:26px!important;height:26px!important;}
+  #легендаПлана{display:none!important;}
+}
+/* ---------- план на весь экран */
+body.весьЭкран #приложение > header,
+body.весьЭкран #приложение > #вкладки,
+body.весьЭкран #приложение > #панельИнструментов,
+body.весьЭкран #легендаПлана{display:none!important;}
+body.весьЭкран #приложение > #областьПлана{grid-column:1 / -1!important;
+  padding-top:env(safe-area-inset-top);}
+#кВесьЭкран svg{width:20px;height:20px;}
+body.весьЭкран #кВесьЭкран{color:var(--акцент);background:var(--акцент-слабо);}
+#навигацияПлана.свернута > #кВесьЭкран{display:inline-flex!important;}
+`;
+  const стиль = document.createElement("style");
+  стиль.id = "компактныйВид";
+  стиль.textContent = css;
+  document.head.appendChild(стиль);
+
+  // диагональные стрелки — чтобы не путать со значком «Вписать план»
+  const РАЗВЕРНУТЬ = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>';
+  const СВЕРНУТЬ = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h6V4M10 10L3 3M20 14h-6v6M14 14l7 7"/></svg>';
+
+  const нав = document.getElementById("навигацияПлана");
+  if (!нав) return;
+  const к = document.createElement("button");
+  к.id = "кВесьЭкран";
+  к.type = "button";
+  нав.insertBefore(к, нав.firstChild);
+
+  function применить(вкл, молча){
+    document.body.classList.toggle("весьЭкран", вкл);
+    к.innerHTML = вкл ? СВЕРНУТЬ : РАЗВЕРНУТЬ;
+    const подпись = вкл ? "Показать инструменты" : "План на весь экран";
+    к.title = подпись; к.setAttribute("aria-label", подпись);
+    к.setAttribute("aria-pressed", вкл ? "true" : "false");
+    try { localStorage.setItem("аксис.весьЭкран", вкл ? "1" : ""); } catch (e) {}
+    // холст подстраивается под новый размер области
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    if (!молча && typeof сказать === "function")
+      сказать(вкл ? "План на весь экран. Инструменты — той же кнопкой" : "Инструменты показаны");
+  }
+  к.onclick = () => применить(!document.body.classList.contains("весьЭкран"));
+  let было = false;
+  try { было = localStorage.getItem("аксис.весьЭкран") === "1"; } catch (e) {}
+  применить(было, true);
+})();
+</script>
 </body>
 </html>
