@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Конструктор подложек</title>
+<style>
+:root{
+  --фон:#f3f5f6; --карта:#fff; --текст:#1d2a30; --слабый:#6b7a82;
+  --акцент:#187e78; --акцент2:#0f5f5a; --линия:#d5dde0; --красный:#d84315;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --фон:#151b1e; --карта:#1f272b; --текст:#e6eef0; --слабый:#93a3aa;
+         --акцент:#3bb0a6; --акцент2:#62c8bf; --линия:#33424a; --красный:#ff7a50; }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--фон);color:var(--текст);
+  font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{display:flex;flex-direction:column}
+header{padding:10px 16px;background:var(--карта);border-bottom:1px solid var(--линия);
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:17px;margin:0 auto 0 0}
+header a{color:var(--акцент);font-size:14px}
+main{flex:1;display:flex;min-height:0}
+aside{width:320px;flex:none;overflow:auto;padding:14px 16px;background:var(--карта);
+  border-right:1px solid var(--линия)}
+.шаг{margin-bottom:18px}
+.шаг h2{font-size:14px;margin:0 0 8px;display:flex;gap:8px;align-items:center}
+.шаг h2 b{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;
+  background:var(--акцент);color:#fff;font-size:12px}
+.подсказка{color:var(--слабый);font-size:13px;margin:6px 0 0}
+button,select,input[type=text],input[type=number]{font:inherit;color:var(--текст);
+  background:var(--фон);border:1px solid var(--линия);border-radius:8px;padding:7px 10px}
+button{cursor:pointer}
+button:hover:not(:disabled){border-color:var(--акцент)}
+button:disabled{opacity:.45;cursor:default}
+button.главная{background:var(--акцент);border-color:var(--акцент);color:#fff;font-weight:600}
+button.главная:hover:not(:disabled){background:var(--акцент2)}
+button.вкл{outline:2px solid var(--акцент);outline-offset:1px}
+.ряд{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}
+input[type=text]{width:100%}
+input[type=number]{width:110px}
+#область{flex:1;position:relative;min-width:0;overflow:hidden;
+  background-image:linear-gradient(45deg,var(--линия) 25%,transparent 25%),
+  linear-gradient(-45deg,var(--линия) 25%,transparent 25%);
+  background-size:24px 24px;background-color:var(--фон)}
+#холст{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#пусто{position:absolute;inset:0;display:grid;place-items:center;text-align:center;
+  color:var(--слабый);padding:20px;pointer-events:none}
+#пусто div{background:var(--карта);border:2px dashed var(--линия);border-radius:14px;padding:28px 34px}
+#статус{padding:8px 16px;background:var(--карта);border-top:1px solid var(--линия);
+  font-size:13px;color:var(--слабый);min-height:36px}
+#статус.ошибка{color:var(--красный)}
+.итог{background:var(--фон);border-radius:8px;padding:8px 10px;font-size:13px;margin-top:8px}
+@media (max-width:760px){
+  main{flex-direction:column}
+  aside{width:auto;border-right:0;border-bottom:1px solid var(--линия);max-height:52vh}
+  #область{min-height:48vh}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Конструктор подложек для «Обмеров»</h1>
+  <a href="./">← Открыть «Обмеры»</a>
+</header>
+<main>
+  <aside>
+    <div class="шаг">
+      <h2><b>1</b>План</h2>
+      <button class="главная" id="кФайл">Выбрать PDF или картинку</button>
+      <input type="file" id="файл" accept="application/pdf,.pdf,image/*,.json,application/json" hidden>
+      <div class="ряд" id="рядСтраницы" hidden>
+        <label for="страница">Лист PDF</label>
+        <select id="страница"></select>
+      </div>
+      <div class="ряд">
+        <label for="качество">Чёткость</label>
+        <select id="качество">
+          <option value="2000">обычная (2000 px)</option>
+          <option value="3000" selected>высокая (3000 px)</option>
+          <option value="4500">очень высокая (4500 px)</option>
+        </select>
+      </div>
+      <p class="подсказка">Чем выше чёткость, тем больше файл. Для этажа обычно хватает «высокой».
+        Можно просто перетащить файл в окно.</p>
+      <p class="подсказка">Можно открыть и <b>готовую подложку .json</b> (даже с замерами) — чтобы добавить
+        привязку к AutoCAD или поправить масштаб. Замеры и фото в ней сохранятся.</p>
+    </div>
+
+    <div class="шаг">
+      <h2><b>2</b>Поворот и обрезка</h2>
+      <div class="ряд">
+        <button id="кВлево" disabled title="Повернуть против часовой">↺ 90°</button>
+        <button id="кВправо" disabled title="Повернуть по часовой">↻ 90°</button>
+        <button id="кРамка" disabled>✂ Обрезать</button>
+      </div>
+      <div class="ряд" id="рядОбрезки" hidden>
+        <button class="главная" id="кОбрезать">Применить обрезку</button>
+        <button id="кОбрезкаОтмена">Отмена</button>
+      </div>
+      <p class="подсказка" id="подсказкаОбрезки">Нажмите «Обрезать» и обведите мышкой нужную часть плана — уберите штамп и поля.</p>
+    </div>
+
+    <div class="шаг">
+      <h2><b>3</b>Масштаб</h2>
+      <button id="кМасштаб" disabled>📏 Указать отрезок на плане</button>
+      <div class="ряд" id="рядМасштаба" hidden>
+        <input type="number" id="мм" min="1" step="any" placeholder="длина, мм" inputmode="decimal">
+        <button class="главная" id="кМасштабОК">OK</button>
+      </div>
+      <p class="подсказка">Кликните в два конца известного размера (например, между осями 6000 мм), затем введите его длину в мм.
+        Без масштаба подложка тоже работает, но площади и длины по плану считаться не будут.</p>
+      <div class="итог" id="итогМасштаба">Масштаб не задан</div>
+    </div>
+
+    <div class="шаг">
+      <h2><b>4</b>Привязка к AutoCAD <small style="font-weight:400;color:var(--слабый)">(по желанию)</small></h2>
+      <p class="подсказка" style="margin-top:0">Две точки, координаты которых известны в чертеже, — например, пересечения осей А/1 и Г/5.
+        Тогда «Экспорт в DXF» ляжет точно на чертёж, и масштаб задастся сам.</p>
+      <div class="ряд">
+        <button id="кТочка0" disabled>⊕ Точка 1</button>
+        <input type="number" id="X0" step="any" placeholder="X" style="width:90px">
+        <input type="number" id="Y0" step="any" placeholder="Y" style="width:90px">
+      </div>
+      <div class="ряд">
+        <button id="кТочка1" disabled>⊕ Точка 2</button>
+        <input type="number" id="X1" step="any" placeholder="X" style="width:90px">
+        <input type="number" id="Y1" step="any" placeholder="Y" style="width:90px">
+      </div>
+      <div class="итог" id="итогПривязки">Привязка не задана</div>
+    </div>
+
+    <div class="шаг">
+      <h2><b>5</b>Сохранить</h2>
+      <input type="text" id="имя" placeholder="Например: Корпус 2, этаж 3">
+      <div class="ряд">
+        <label><input type="checkbox" id="png"> PNG (чётче линии, файл больше)</label>
+      </div>
+      <div class="ряд">
+        <button class="главная" id="кСохранить" disabled>💾 Сохранить подложку</button>
+      </div>
+      <p class="подсказка">Получится файл <b>.json</b>. Отправьте его себе в Telegram,
+        на iPhone сохраните в «Файлы» и откройте в «Обмерах» → «Открыть подложку».</p>
+    </div>
+  </aside>
+  <div id="область">
+    <canvas id="холст"></canvas>
+    <div id="пусто"><div>Выберите или перетащите сюда<br><b>PDF или картинку плана</b></div></div>
+  </div>
+</main>
+<div id="статус" role="status">Готов к работе.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const холст = $("холст"), ctx = холст.getContext("2d");
+
+let исходник = null;        // {тип:"pdf", pdf} | {тип:"img", img}
+let план = null;            // canvas с текущим планом (после поворота/обрезки)
+let мм_на_пиксель = 0;
+let режим = "";             // "" | "обрезка" | "масштаб"
+let рамка = null;           // {x1,y1,x2,y2} в пикселях плана
+let точки = [];             // точки масштаба в пикселях плана
+let вид = {s:1, x:0, y:0};  // экранное отображение плана
+let тащим = null;
+
+function статус(текст, ошибка){
+  $("статус").textContent = текст;
+  $("статус").classList.toggle("ошибка", !!ошибка);
+}
+
+/* ---------------- загрузка файла */
+$("кФайл").onclick = () => $("файл").click();
+$("файл").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) открыть(f); };
+$("область").addEventListener("dragover", e => { e.preventDefault(); });
+$("область").addEventListener("drop", e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) открыть(f);
+});
+
+async function открыть(f){
+  const имя = f.name.replace(/\.[^.]+$/, "");
+  if (!$("имя").value.trim()) $("имя").value = имя;
+  try {
+    if (/\.json$/i.test(f.name) || f.type === "application/json") {
+      const d = JSON.parse(await f.text());
+      if (!d.background_data) throw new Error("В этой подложке нет картинки плана.");
+      const img = new Image();
+      img.src = d.background_data;
+      await img.decode();
+      исходник = {тип:"json", d, img, имяФайла: f.name};
+      $("имя").value = имя;
+      $("рядСтраницы").hidden = true;
+    } else if (f.type === "application/pdf" || /\.pdf$/i.test(f.name)) {
+      if (!window.pdfjsLib) throw new Error("Не загрузилась библиотека PDF — нужен интернет. Или сохраните лист как картинку.");
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      статус("Открываю PDF…");
+      const pdf = await pdfjsLib.getDocument({data: await f.arrayBuffer()}).promise;
+      исходник = {тип:"pdf", pdf};
+      const sel = $("страница"); sel.innerHTML = "";
+      for (let i = 1; i <= pdf.numPages; i++) sel.add(new Option("Лист " + i, i));
+      $("рядСтраницы").hidden = pdf.numPages < 2;
+    } else if (f.type.startsWith("image/")) {
+      const img = new Image();
+      img.src = URL.createObjectURL(f);
+      await img.decode();
+      исходник = {тип:"img", img};
+      $("рядСтраницы").hidden = true;
+    } else {
+      throw new Error("Этот тип файла не поддерживается. Нужен PDF, JPG или PNG. DWG сначала сохраните в PDF.");
+    }
+    await отрисоватьИсходник();
+  } catch (e) {
+    console.error(e);
+    статус("Ошибка: " + (e.message || e), true);
+  }
+}
+
+async function отрисоватьИсходник(){
+  if (!исходник) return;
+  const предел = +$("качество").value;
+  const c = document.createElement("canvas");
+  if (исходник.тип === "pdf") {
+    const стр = await исходник.pdf.getPage(+$("страница").value || 1);
+    const v1 = стр.getViewport({scale:1});
+    const k = предел / Math.max(v1.width, v1.height);
+    const v = стр.getViewport({scale:k});
+    c.width = Math.round(v.width); c.height = Math.round(v.height);
+    const cx = c.getContext("2d");
+    cx.fillStyle = "#fff"; cx.fillRect(0, 0, c.width, c.height);
+    статус("Рисую лист…");
+    // intent "print" — рисовать без requestAnimationFrame: иначе в свёрнутой
+    // вкладке отрисовка встаёт на паузу и лист не появляется
+    await стр.render({canvasContext:cx, viewport:v, intent:"print"}).promise;
+  } else if (исходник.тип === "json") {
+    // Готовая подложка: картинку не трогаем — к её пикселям привязаны маркеры
+    const img = исходник.img;
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+  } else {
+    const img = исходник.img;
+    const k = Math.min(1, предел / Math.max(img.naturalWidth, img.naturalHeight));
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    const cx = c.getContext("2d");
+    cx.fillStyle = "#fff"; cx.fillRect(0, 0, c.width, c.height);
+    cx.drawImage(img, 0, 0, c.width, c.height);
+  }
+  план = c;
+  мм_на_пиксель = 0; точки = []; рамка = null; задатьРежим("");
+  сброситьПривязку();
+  const готовая = исходник.тип === "json";
+  if (готовая) {
+    const v = исходник.d.vor || {};
+    мм_на_пиксель = +v.mm_per_px || 0;
+    const р = v.cad_ref;
+    if (р && р.px && р.mm && р.px.length === 2 && р.mm.length === 2) {
+      привязка.px = р.px.map(p => [+p[0], +p[1]]);
+      for (let i = 0; i < 2; i++) { $("X" + i).value = р.mm[i][0]; $("Y" + i).value = р.mm[i][1]; }
+    }
+  }
+  обновитьМасштаб(); обновитьПривязку();
+  $("пусто").hidden = true;
+  for (const id of ["кМасштаб","кСохранить","кТочка0","кТочка1"]) $(id).disabled = false;
+  // У готовой подложки поворот и обрезка сдвинули бы все замеры
+  for (const id of ["кВлево","кВправо","кРамка"]) $(id).disabled = готовая;
+  $("качество").disabled = готовая;
+  вписать();
+  статус(готовая
+    ? "Открыта подложка (маркеров: " + ((исходник.d.markers || []).length) + "). Можно задать масштаб и привязку, затем сохранить."
+    : "План " + план.width + " × " + план.height + " px. Обрежьте лишнее и задайте масштаб.");
+}
+
+/* ---------------- привязка к координатам AutoCAD */
+const привязка = {px:[null, null]};
+function сброситьПривязку(){
+  привязка.px = [null, null];
+  for (const i of [0, 1]) { $("X" + i).value = ""; $("Y" + i).value = ""; }
+}
+function числоИз(id){ const v = parseFloat(String($(id).value).replace(",", ".")); return isFinite(v) ? v : null; }
+function готоваПривязка(){
+  if (!привязка.px[0] || !привязка.px[1]) return null;
+  const mm = [0, 1].map(i => [числоИз("X" + i), числоИз("Y" + i)]);
+  if (mm.some(p => p[0] === null || p[1] === null)) return null;
+  const dp = Math.hypot(привязка.px[1][0] - привязка.px[0][0], привязка.px[1][1] - привязка.px[0][1]);
+  const dm = Math.hypot(mm[1][0] - mm[0][0], mm[1][1] - mm[0][1]);
+  if (dp < 5 || dm <= 0) return null;
+  return {px: привязка.px.map(p => [p[0], p[1]]), mm, мм_на_пиксель: dm / dp};
+}
+function обновитьПривязку(){
+  const р = готоваПривязка();
+  const есть = [0, 1].map(i => !!привязка.px[i]);
+  if (р) {
+    $("итогПривязки").innerHTML = "Привязка задана ✓<br>по точкам: 1 px = <b>" + р.мм_на_пиксель.toFixed(3) + " мм</b>" +
+      (мм_на_пиксель && Math.abs(р.мм_на_пиксель / мм_на_пиксель - 1) > 0.02
+        ? "<br><span style='color:var(--красный)'>Расходится с масштабом на " +
+          Math.round(Math.abs(р.мм_на_пиксель / мм_на_пиксель - 1) * 100) + "% — проверьте точки и координаты.</span>" : "");
+  } else {
+    $("итогПривязки").textContent = есть[0] || есть[1]
+      ? "Отмечено точек: " + (есть[0] + есть[1]) + " из 2. Впишите X и Y из AutoCAD."
+      : "Привязка не задана";
+  }
+  рисовать();
+}
+for (const i of [0, 1]) {
+  $("кТочка" + i).onclick = () => {
+    задатьРежим(режим === "привязка" + i ? "" : "привязка" + i);
+    if (режим) статус("Кликните на плане точку " + (i + 1) + " (например, пересечение осей), затем впишите её X и Y из AutoCAD.");
+  };
+  $("X" + i).oninput = $("Y" + i).oninput = обновитьПривязку;
+}
+$("страница").onchange = отрисоватьИсходник;
+$("качество").onchange = () => {
+  if (исходник && (!мм_на_пиксель || confirm("Чёткость поменяется, план откроется заново — поворот, обрезку и масштаб придётся задать снова. Продолжить?")))
+    отрисоватьИсходник();
+};
+
+/* ---------------- отображение */
+function размерХолста(){
+  const r = холст.getBoundingClientRect(), d = devicePixelRatio || 1;
+  холст.width = Math.round(r.width * d); холст.height = Math.round(r.height * d);
+}
+function вписать(){
+  размерХолста();
+  if (!план) return рисовать();
+  const d = devicePixelRatio || 1, w = холст.width / d, h = холст.height / d, отступ = 20;
+  вид.s = Math.min((w - 2*отступ) / план.width, (h - 2*отступ) / план.height);
+  вид.x = (w - план.width * вид.s) / 2;
+  вид.y = (h - план.height * вид.s) / 2;
+  рисовать();
+}
+window.addEventListener("resize", вписать);
+
+function вПлан(e){
+  const r = холст.getBoundingClientRect();
+  return [(e.clientX - r.left - вид.x) / вид.s, (e.clientY - r.top - вид.y) / вид.s];
+}
+function вЭкран(x, y){ return [вид.x + x * вид.s, вид.y + y * вид.s]; }
+
+function рисовать(){
+  const d = devicePixelRatio || 1;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0, 0, холст.width, холст.height);
+  if (!план) return;
+  ctx.setTransform(d,0,0,d,0,0);
+  ctx.imageSmoothingQuality = "high";
+  ctx.shadowColor = "rgba(0,0,0,.25)"; ctx.shadowBlur = 12;
+  ctx.drawImage(план, вид.x, вид.y, план.width * вид.s, план.height * вид.s);
+  ctx.shadowBlur = 0;
+
+  if (рамка) {
+    const [ax, ay] = вЭкран(Math.min(рамка.x1, рамка.x2), Math.min(рамка.y1, рамка.y2));
+    const [bx, by] = вЭкран(Math.max(рамка.x1, рамка.x2), Math.max(рамка.y1, рамка.y2));
+    ctx.fillStyle = "rgba(0,0,0,.45)";
+    const [px, py] = вЭкран(0, 0), [qx, qy] = вЭкран(план.width, план.height);
+    ctx.beginPath(); ctx.rect(px, py, qx - px, qy - py); ctx.rect(ax, ay, bx - ax, by - ay);
+    ctx.fill("evenodd");
+    ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+    ctx.strokeRect(ax, ay, bx - ax, by - ay); ctx.setLineDash([]);
+  }
+  if (точки.length) {
+    ctx.strokeStyle = "#e53935"; ctx.fillStyle = "#e53935"; ctx.lineWidth = 2.5;
+    const э = точки.map(p => вЭкран(p[0], p[1]));
+    if (э.length === 2) { ctx.beginPath(); ctx.moveTo(...э[0]); ctx.lineTo(...э[1]); ctx.stroke(); }
+    for (const [x, y] of э) { ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill(); }
+  }
+  if (typeof привязка !== "undefined") привязка.px.forEach((p, i) => {
+    if (!p) return;
+    const [x, y] = вЭкран(p[0], p[1]);
+    ctx.strokeStyle = "#1e88e5"; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(x - 12, y); ctx.lineTo(x + 12, y); ctx.moveTo(x, y - 12); ctx.lineTo(x, y + 12); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 7, 0, 7); ctx.stroke();
+    ctx.fillStyle = "#1e88e5"; ctx.font = "bold 15px system-ui"; ctx.fillText(String(i + 1), x + 9, y - 9);
+  });
+}
+
+/* ---------------- мышь: обрезка, масштаб, перемещение и приближение */
+холст.addEventListener("pointerdown", e => {
+  if (!план) return;
+  холст.setPointerCapture(e.pointerId);
+  const [x, y] = вПлан(e);
+  if (режим === "обрезка") {
+    рамка = {x1:огр(x, план.width), y1:огр(y, план.height), x2:огр(x, план.width), y2:огр(y, план.height)};
+    тащим = {вид:"рамка"};
+  } else if (режим === "масштаб") {
+    if (точки.length >= 2) точки = [];
+    точки.push([x, y]);
+    if (точки.length === 2) {
+      $("рядМасштаба").hidden = false;
+      $("мм").focus();
+      статус("Введите реальную длину отрезка в мм и нажмите OK.");
+    } else статус("Теперь кликните во второй конец размера.");
+  } else if (режим.startsWith("привязка")) {
+    const i = +режим.slice(-1);
+    привязка.px[i] = [x, y];
+    задатьРежим("");
+    $("X" + i).focus();
+    обновитьПривязку();
+    статус("Точка " + (i + 1) + " отмечена. Впишите её X и Y из AutoCAD.");
+  } else {
+    тащим = {вид:"план", x:e.clientX, y:e.clientY, вx:вид.x, вy:вид.y};
+  }
+  рисовать();
+});
+холст.addEventListener("pointermove", e => {
+  if (!тащим) return;
+  if (тащим.вид === "рамка") {
+    const [x, y] = вПлан(e);
+    рамка.x2 = огр(x, план.width); рамка.y2 = огр(y, план.height);
+  } else {
+    вид.x = тащим.вx + e.clientX - тащим.x;
+    вид.y = тащим.вy + e.clientY - тащим.y;
+  }
+  рисовать();
+});
+холст.addEventListener("pointerup", () => {
+  if (тащим && тащим.вид === "рамка") $("кОбрезать").disabled = ширинаРамки() < 10;
+  тащим = null;
+});
+холст.addEventListener("wheel", e => {
+  if (!план) return;
+  e.preventDefault();
+  const r = холст.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k = Math.exp(-e.deltaY * 0.0015);
+  вид.x = mx - (mx - вид.x) * k; вид.y = my - (my - вид.y) * k; вид.s *= k;
+  рисовать();
+}, {passive:false});
+холст.addEventListener("dblclick", вписать);
+const огр = (v, max) => Math.max(0, Math.min(max, v));
+const ширинаРамки = () => рамка ? Math.min(Math.abs(рамка.x2 - рамка.x1), Math.abs(рамка.y2 - рамка.y1)) : 0;
+
+function задатьРежим(р){
+  режим = р;
+  $("кРамка").classList.toggle("вкл", р === "обрезка");
+  $("кМасштаб").classList.toggle("вкл", р === "масштаб");
+  $("кТочка0").classList.toggle("вкл", р === "привязка0");
+  $("кТочка1").classList.toggle("вкл", р === "привязка1");
+  $("рядОбрезки").hidden = р !== "обрезка";
+  if (р !== "обрезка") рамка = null;
+  if (р !== "масштаб") $("рядМасштаба").hidden = true;
+  холст.style.cursor = р ? "crosshair" : "grab";
+  рисовать();
+}
+
+/* ---------------- поворот и обрезка (расстояния в пикселях не меняются — масштаб сохраняется) */
+function повернуть(поЧасовой){
+  const c = document.createElement("canvas");
+  c.width = план.height; c.height = план.width;
+  const cx = c.getContext("2d");
+  if (поЧасовой) { cx.translate(c.width, 0); cx.rotate(Math.PI / 2); }
+  else { cx.translate(0, c.height); cx.rotate(-Math.PI / 2); }
+  cx.drawImage(план, 0, 0);
+  план = c; точки = []; привязка.px = [null, null]; задатьРежим(""); обновитьПривязку(); вписать();
+  статус("Повёрнуто. План " + план.width + " × " + план.height + " px.");
+}
+$("кВлево").onclick = () => повернуть(false);
+$("кВправо").onclick = () => повернуть(true);
+
+$("кРамка").onclick = () => {
+  задатьРежим(режим === "обрезка" ? "" : "обрезка");
+  $("кОбрезать").disabled = true;
+  if (режим) статус("Обведите мышкой часть плана, которую нужно оставить.");
+};
+$("кОбрезкаОтмена").onclick = () => задатьРежим("");
+$("кОбрезать").onclick = () => {
+  if (ширинаРамки() < 10) return;
+  const x = Math.round(Math.min(рамка.x1, рамка.x2)), y = Math.round(Math.min(рамка.y1, рамка.y2));
+  const w = Math.round(Math.abs(рамка.x2 - рамка.x1)), h = Math.round(Math.abs(рамка.y2 - рамка.y1));
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  c.getContext("2d").drawImage(план, x, y, w, h, 0, 0, w, h);
+  план = c; точки = []; привязка.px = [null, null]; задатьРежим(""); обновитьПривязку(); вписать();
+  статус("Обрезано. План " + w + " × " + h + " px.");
+};
+
+/* ---------------- масштаб */
+$("кМасштаб").onclick = () => {
+  точки = [];
+  задатьРежим(режим === "масштаб" ? "" : "масштаб");
+  if (режим) статус("Кликните в первый конец известного размера. Колесо мыши — приблизить.");
+};
+function применитьМасштаб(){
+  const мм = parseFloat(String($("мм").value).replace(",", "."));
+  if (точки.length !== 2 || !(мм > 0)) return статус("Введите длину в мм (число больше нуля).", true);
+  const px = Math.hypot(точки[1][0] - точки[0][0], точки[1][1] - точки[0][1]);
+  if (px < 5) return статус("Точки слишком близко, укажите отрезок подлиннее.", true);
+  мм_на_пиксель = мм / px;
+  задатьРежим("");
+  обновитьМасштаб();
+  статус("Масштаб задан. Можно сохранять.");
+}
+$("кМасштабОК").onclick = применитьМасштаб;
+$("мм").addEventListener("keydown", e => { if (e.key === "Enter") применитьМасштаб(); });
+function обновитьМасштаб(){
+  $("итогМасштаба").innerHTML = мм_на_пиксель
+    ? "1 px = <b>" + мм_на_пиксель.toFixed(3) + " мм</b>" +
+      (план ? "<br>План ≈ " + (план.width * мм_на_пиксель / 1000).toFixed(1) + " × " +
+              (план.height * мм_на_пиксель / 1000).toFixed(1) + " м" : "")
+    : "Масштаб не задан";
+}
+
+/* ---------------- сохранение в формате подложки «Обмеров» */
+$("кСохранить").onclick = () => {
+  if (!план) return;
+  const р = готоваПривязка();
+  if ((привязка.px[0] || привязка.px[1]) && !р &&
+      !confirm("Привязка к AutoCAD заполнена не полностью и не сохранится. Продолжить?")) return;
+  // Масштаб не задан, а привязка есть — берём масштаб из неё
+  if (!мм_на_пиксель && р) { мм_на_пиксель = р.мм_на_пиксель; обновитьМасштаб(); }
+  if (!мм_на_пиксель && !confirm("Масштаб не задан — площади и длины по плану считаться не будут. Сохранить всё равно?")) return;
+  const имя = ($("имя").value.trim() || "подложка").replace(/[\\/:*?"<>|]/g, "_");
+  let подложка;
+  if (исходник.тип === "json") {
+    // Готовая подложка: меняем только масштаб и привязку, остальное как было
+    подложка = Object.assign({}, исходник.d);
+    подложка.vor = Object.assign({}, исходник.d.vor || {}, {mm_per_px: мм_на_пиксель});
+  } else {
+    const png = $("png").checked;
+    подложка = {
+      version: "1.0",
+      global_marker_size: 30,
+      markers: [],
+      vor: {mm_per_px: мм_на_пиксель, origin: [0, 0], units: "мм", finish_names: []},
+      background_data: png ? план.toDataURL("image/png") : план.toDataURL("image/jpeg", 0.9)
+    };
+  }
+  if (р) подложка.vor.cad_ref = {px: р.px, mm: р.mm};
+  else delete подложка.vor.cad_ref;
+  const blob = new Blob([JSON.stringify(подложка)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = имя + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  const мб = (blob.size / 1048576).toFixed(1);
+  статус("Сохранено: " + имя + ".json (" + мб + " МБ)" +
+         (blob.size > 15 * 1048576 ? ". Файл большой — если телефон тормозит, выберите чёткость пониже." : "."));
+};
+
+размерХолста(); рисовать();
+</script>
+</body>
+</html>
