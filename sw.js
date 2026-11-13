@@ -1,8 +1,8 @@
 /* Офлайн-режим для «АКСИС · Обмеры».
    Когда есть интернет — берём свежую страницу с сайта и кладём копию в память.
    Когда интернета нет — открываем копию из памяти. */
-const КЭШ = "aksis-obmery-v1";
-const ФАЙЛЫ = ["./", "./index.html", "./sw.js"];
+const КЭШ = "aksis-obmery-v2";
+const ФАЙЛЫ = ["./", "./index.html", "./podlozhka.html"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(КЭШ).then((c) => c.addAll(ФАЙЛЫ)));
@@ -23,9 +23,15 @@ self.addEventListener("fetch", (e) => {
 
   // Сначала сеть (чтобы версия всегда была свежей), при неудаче — копия.
   // Кнопка «Обновить приложение» добавляет ?в=… — такие адреса сводим к index.html.
-  const ключ = запрос.mode === "navigate" ? "./index.html" : запрос;
+  // Каждая страница хранится под своим адресом без «?…»; корень сайта = index.html.
+  const адрес = new URL(запрос.url);
+  адрес.search = "";
+  if (адрес.pathname.endsWith("/")) адрес.pathname += "index.html";
+  const ключ = адрес.href;
+  // cache:"no-cache" — всегда сверяться с сайтом, иначе браузер до 10 минут
+  // показывает старую версию после обновления
   e.respondWith(
-    fetch(запрос)
+    fetch(запрос.url, {cache: "no-cache", credentials: "same-origin"})
       .then((ответ) => {
         if (ответ.ok) {
           const копия = ответ.clone();
