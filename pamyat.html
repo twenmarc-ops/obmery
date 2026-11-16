@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Память браузера</title>
+<style>
+:root{--фон:#f4f6f7;--бумага:#fff;--чернила:#1d2a30;--тихо:#5f6f77;--край:#d7dfe3;--акцент:#187e78;--плохо:#b3261e}
+@media (prefers-color-scheme:dark){:root{--фон:#11181b;--бумага:#1a2327;--чернила:#e6eef1;--тихо:#9aabb3;--край:#2d3a40;--акцент:#3fb6ad}}
+body{margin:0;background:var(--фон);color:var(--чернила);font:15px/1.45 -apple-system,system-ui,sans-serif;
+  padding:16px;padding-top:calc(16px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+main{max-width:640px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:22px 0 8px}
+.тихо{color:var(--тихо);font-size:13px}
+.карта{background:var(--бумага);border:1px solid var(--край);border-radius:12px;padding:10px 12px;margin:8px 0}
+.карта b{display:block;font-size:15px;word-break:break-word}
+.карта.важно{border-color:var(--акцент);border-width:2px}
+button{min-height:44px;padding:8px 14px;border-radius:10px;border:1px solid var(--край);background:var(--бумага);
+  color:inherit;font:inherit;cursor:pointer;margin:6px 6px 0 0}
+button.главная{background:var(--акцент);border-color:var(--акцент);color:#fff;font-weight:600;width:100%;margin:10px 0 0}
+#статус{font-size:13px;color:var(--тихо);margin-top:6px}
+.ошибка{color:var(--плохо)}
+</style>
+</head>
+<body>
+<main>
+<h1>Память браузера</h1>
+<p class="тихо">Только просмотр: страница ничего не меняет и не удаляет. Показывает, что «Обмеры» хранят в этом браузере на этом адресе: <span id="адрес"></span></p>
+<button class="главная" id="кВсё" disabled>Готовлю…</button>
+<div id="статус"></div>
+<h2>Открытые и недавние подложки</h2><div id="недавние" class="тихо">Читаю…</div>
+<h2>Черновики (последнее состояние работы)</h2><div id="черновики" class="тихо">Читаю…</div>
+<h2>Резервные копии</h2><div id="резерв" class="тихо">Читаю…</div>
+<h2>Фото</h2><div id="фото" class="тихо">Читаю…</div>
+<h2>Прочее в памяти</h2><div id="прочее" class="тихо">Читаю…</div>
+</main>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+$("адрес").textContent=location.host;
+const КЛЮЧ="вор.подложка.черновик", РЕЗЕРВ=КЛЮЧ+".резерв";
+const дамп={адрес:location.origin,когда:new Date().toISOString(),localStorage:{},idb:{}};
+
+function когда(t){try{return t?new Date(t).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"?";}catch(e){return "?";}}
+function чисто(и){return String(и||"без имени").replace(/\.json$/i,"");}
+function описание(ч){
+  const м=ч.м||[];
+  const фото=м.reduce((s,d)=>s+((d&&d.photos)||[]).length,0);
+  const с=м.filter(d=>d&&Object.values(d.attributes||{}).some(v=>v!==null&&v!==undefined&&String(v).trim()!=="")).length;
+  return "маркеров "+м.length+" (с данными "+с+"), фото "+фото+", линий "+((ч.р||[]).length);
+}
+function карта(куда,имя,текст,важно,кнопки){
+  const d=document.createElement("div");d.className="карта"+(важно?" важно":"");
+  const b=document.createElement("b");b.textContent=имя;
+  const p=document.createElement("div");p.className="тихо";p.textContent=текст;
+  d.append(b,p);
+  for(const [подпись,дело] of (кнопки||[])){const к=document.createElement("button");к.textContent=подпись;к.onclick=дело;d.append(к);}
+  куда.append(d);
+}
+function отдать(имя,текст){
+  const файл=new File([текст],имя,{type:"application/json"});
+  if(navigator.canShare&&navigator.canShare({files:[файл]}))
+    return navigator.share({files:[файл],title:имя}).catch(e=>{if(e&&e.name!=="AbortError")скачать(файл);});
+  скачать(файл);
+}
+function скачать(файл){
+  const a=document.createElement("a");a.href=URL.createObjectURL(файл);a.download=файл.name;
+  document.body.append(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},4000);
+}
+function вТекст(v){
+  return new Promise(готово=>{
+    if(v instanceof Blob){const r=new FileReader();r.onload=()=>готово({__blob:r.result});r.onerror=()=>готово(null);r.readAsDataURL(v);return;}
+    if(v instanceof ArrayBuffer){готово({__bytes:v.byteLength});return;}
+    готово(v);
+  });
+}
+
+/* ---------- localStorage */
+const черн=[],рез=[],прочее=[];
+for(let i=0;i<localStorage.length;i++){
+  const k=localStorage.key(i), v=localStorage.getItem(k)||"";
+  дамп.localStorage[k]=v;
+  let ч=null; try{ч=JSON.parse(v);}catch(e){}
+  if(k.indexOf(РЕЗЕРВ+":")===0&&ч) рез.push({k,ч});
+  else if(k.indexOf(КЛЮЧ+":")===0&&ч) черн.push({k,ч});
+  else прочее.push({k,размер:v.length});
+}
+function показатьКопии(куда,список,вид){
+  куда.textContent="";куда.className="";
+  if(!список.length){куда.className="тихо";куда.textContent="Нет.";return;}
+  список.sort((a,b)=>(b.ч.когда||0)-(a.ч.когда||0));
+  for(const с of список){
+    const имя=чисто(с.ч.имя);
+    карта(куда,имя,вид+" от "+когда(с.ч.когда)+" — "+описание(с.ч),/1\s*эт/i.test(имя),
+      [["Сохранить копию",()=>отдать(имя+" — "+вид+" "+когда(с.ч.когда).replace(/[^\d]+/g,"-")+".json",JSON.stringify(с.ч))]]);
+  }
+}
+показатьКопии($("черновики"),черн,"черновик");
+показатьКопии($("резерв"),рез,"резерв");
+$("прочее").textContent=прочее.length?прочее.map(п=>п.k+" ("+п.размер+" симв.)").join("; "):"Нет.";
+
+/* ---------- IndexedDB: открываем без версии и ничего не создаём */
+function открытьБД(){
+  return new Promise(готово=>{
+    let з;
+    try{з=indexedDB.open("вор.подложка");}catch(e){return готово(null);}
+    з.onupgradeneeded=e=>{try{e.target.transaction.abort();}catch(x){}}; // базы нет — не создаём пустую
+    з.onsuccess=()=>готово(з.result);
+    з.onerror=()=>готово(null);
+    з.onblocked=()=>готово(null);
+  });
+}
+function всё(d,хран){
+  return new Promise(готово=>{
+    if(!d.objectStoreNames.contains(хран)) return готово([]);
+    const out=[];
+    const к=d.transaction(хран,"readonly").objectStore(хран).openCursor();
+    к.onsuccess=()=>{const c=к.result;if(!c)return готово(out);out.push({key:c.key,value:c.value});c.continue();};
+    к.onerror=()=>готово(out);
+  });
+}
+(async()=>{
+  const d=await открытьБД();
+  if(!d){$("недавние").textContent="Базы с подложками и фото на этом адресе нет.";$("фото").textContent="Нет.";}
+  else{
+    for(const хран of d.objectStoreNames){
+      const записи=await всё(d,хран);
+      for(const з of записи) з.value=await вТекст(з.value);
+      дамп.idb[хран]=записи;
+    }
+    d.close();
+    const нед=дамп.idb["подложки"]||[];
+    const куда=$("недавние");куда.textContent="";куда.className="";
+    if(!нед.length){куда.className="тихо";куда.textContent="Нет.";}
+    нед.sort((a,b)=>(b.value.когда||0)-(a.value.когда||0));
+    for(const з of нед){
+      const v=з.value||{}, имя=чисто(v.имя);
+      let вФайле=0;try{вФайле=(JSON.parse(v.текст||"{}").markers||[]).length;}catch(e){}
+      карта(куда,имя,"открывалась "+когда(v.когда)+" — замерено "+(v.замерено??"?")+" из "+(v.всего??"?")+
+        ", маркеров в самом файле "+вФайле+", фото "+((v.фото||[]).length),/1\s*эт/i.test(имя),
+        v.текст?[["Сохранить файл подложки",()=>отдать(имя+" — из памяти.json",v.текст)]]:[]);
+    }
+    const ф=дамп.idb["фото"]||[];
+    $("фото").textContent="Снимков в памяти: "+ф.length+(дамп.idb["исходники"]?", исходников: "+дамп.idb["исходники"].length:"")+".";
+  }
+  const текст=JSON.stringify(дамп);
+  const мб=(текст.length/1048576).toFixed(1);
+  const к=$("кВсё");к.disabled=false;к.textContent="Сохранить всю память одним файлом ("+мб+" МБ)";
+  к.onclick=()=>отдать("память_"+location.host+"_"+когда(Date.now()).replace(/[^\d]+/g,"-")+".json",текст);
+  $("статус").textContent="Этот файл можно прислать: по нему восстановлю всё, что в нём есть.";
+})().catch(e=>{$("статус").className="ошибка";$("статус").textContent="Ошибка: "+(e&&e.message||e);});
+</script>
+</body>
+</html>
