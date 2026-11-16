@@ -2433,6 +2433,10 @@ function нужныеСнимки(){
    подставлен, а отменять ещё нечего. В любой другой момент отмена могла
    бы вернуть маркер со снимком, у которого мы только что стёрли байты. */
 async function убратьЛишниеСнимки(){
+  // Отключено: «лишними» здесь оказывались снимки работы, которую черновик
+  // уже потерял, — и стирались последние следы. Место в телефоне дешевле
+  // фотографий с объекта; вернуть их можно через «Восстановить потерянное».
+  return;
   const нужные=нужныеСнимки();
   // Недавние подложки помнят свои снимки списком id. Запись без такого
   // списка осталась от прежней версии страницы — что в ней за снимки,
@@ -7667,11 +7671,44 @@ function черновикФайла(имя){
 
 function сохранитьЧерновик(){ сохранитьЧерновикИз(П); }
 
+/* Резервные копии черновика. Пишутся, когда из черновика пропадают
+   маркеры: так было и при потере работы. По каждому объекту держим три
+   последние копии и ещё самую полную — её не вытеснят мелкие правки. */
+const КЛЮЧ_РЕЗЕРВА=КЛЮЧ+".резерв";
+function резервныеКопии(){
+  const out=[];
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(!k || k.indexOf(КЛЮЧ_РЕЗЕРВА+":")!==0) continue;
+    try{ const ч=JSON.parse(localStorage.getItem(k)||"null"); if(ч && ч.м) out.push({ключ:k, ч}); }catch(e){}
+  }
+  out.sort((a,b)=>(b.ч.когда||0)-(a.ч.когда||0));
+  return out;
+}
+function отложитьВРезерв(ч){
+  try{
+    const к=корень(ч.имя);
+    localStorage.setItem(КЛЮЧ_РЕЗЕРВА+":"+к+":"+(ч.когда||Date.now()), JSON.stringify(ч));
+    const свои=резервныеКопии().filter(с=>корень(с.ч.имя)===к);
+    let полная=свои[0];
+    for(const с of свои) if(с.ч.м.length>полная.ч.м.length) полная=с;
+    свои.forEach((с, i)=>{ if(i>=3 && с!==полная) localStorage.removeItem(с.ключ); });
+  }catch(e){ /* места нет — черновик важнее */ }
+}
+
 /* Не обязательно текущая подложка: у закрываемой вкладки работа тоже
    должна остаться в памяти браузера, а на экране её уже нет. */
 function сохранитьЧерновикИз(п){
   if(!п || !п.сырой) return;
   try{
+    // Из черновика пропадают маркеры — прежнюю версию сначала в резерв
+    try{
+      const было=JSON.parse(localStorage.getItem(ключЧерновика(п.имя))||"null");
+      if(было && Array.isArray(было.м) && было.м.length){
+        const есть=new Set(п.маркеры.map(m=>m.id));
+        if(было.м.some(d=>d && !есть.has(d.id))) отложитьВРезерв(было);
+      }
+    }catch(e){}
     localStorage.setItem(ключЧерновика(п.имя), JSON.stringify({
       имя:п.имя, когда:Date.now(),
       м:п.маркеры.map(m=>маркерВ(m, false)), р:п.рисунок.map(штрихВ),
@@ -7946,7 +7983,9 @@ function применитьЧерновикЕслиТотЖе(молча){
   // теперь несколько, и подставить в санузлы замеры с фасада нельзя
   const ч=П.черновикПодставлен ? null : черновикФайла(П.имя);
   П.черновикПодставлен=true;             // предлагаем один раз за открытие
-  if(!ч || ч.имя!==П.имя) return;
+  // Тот же объект — тот же корень имени: «(1)» от мессенджера и «_» вместо
+  // пробелов не должны отрезать работу от её черновика
+  if(!ч || корень(ч.имя)!==корень(П.имя)) return;
 
   // Считаем, что нашлось, ДО того как что-то менять: подставлять замеры
   // молча нельзя — человек мог нарочно выгрузить подложку заново.
@@ -7966,6 +8005,11 @@ function применитьЧерновикЕслиТотЖе(молча){
     }
   }
   const рисунокНовее = ч.р && ч.р.length>П.рисунок.length;
+  // Маркеры, поставленные на объекте: в исходном файле их нет. Раньше
+  // они здесь терялись — подставлялись только замеры уже бывших маркеров,
+  // а пустое состояние тут же записывалось поверх черновика.
+  const естьВФайле=new Set(П.маркеры.map(m=>m.id));
+  const новыеМаркеры=(ч.м||[]).filter(d=>d && d.id && !естьВФайле.has(d.id));
   // отделка, назначенная на объекте: чертёж её не знает
   const своиПом=new Map((ч.п||[]).map(d=>[d.id, d]));
   let отделок=0;
@@ -7974,8 +8018,8 @@ function применитьЧерновикЕслиТотЖе(молча){
     if(d && (String(d.finish_floor||"")!==r.finish_floor
              || String(d.finish_ceiling||"")!==r.finish_ceiling)) отделок++;
   }
-  if(!сколько && !рисунокНовее && !отделок && !снимков && !пометок) return;
-  const что=[сколько? "замеров: "+сколько : "",
+  if(!сколько && !рисунокНовее && !отделок && !снимков && !пометок && !новыеМаркеры.length) return;
+  const что=[новыеМаркеры.length? "новых маркеров: "+новыеМаркеры.length : "", сколько? "замеров: "+сколько : "",
              снимков? "фотографий: "+снимков : "",
              пометок? "фотографий с изменёнными пометками: "+пометок : "",
              рисунокНовее? "дорисовок: "+ч.р.length : "",
@@ -8008,6 +8052,7 @@ function применитьЧерновикЕслиТотЖе(молча){
       }
     }
   }
+  for(const d of новыеМаркеры) П.маркеры.push(маркерИз(d));
   if(рисунокНовее) П.рисунок=ч.р.map(штрихИз);
   for(const r of П.помещения){
     const d=своиПом.get(r.id);
@@ -9238,6 +9283,193 @@ axisInit();
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
   navigator.serviceWorker.register("./sw.js").catch(function (e) { console.warn("SW:", e); });
 }
+</script>
+<script id="recovery">
+/* ================================================ Восстановить потерянное
+   Пункт меню: показывает, что ещё лежит в памяти телефона, и возвращает это
+   в открытую подложку.
+   * Копии работы — черновики и резервные копии (резерв пишется, когда из
+     черновика пропадают маркеры).
+   * Фото без маркера — снимки, байты которых лежат в памяти браузера, но ни
+     один маркер на них не ссылается. Их можно поставить на план
+     фотозаметками и потом перетащить на место.
+*/
+(function(){
+  "use strict";
+  const стиль = document.createElement("style");
+  стиль.textContent = `
+#окноВосстановления{position:fixed;inset:0;z-index:9999;background:rgba(10,20,26,.55);
+  display:flex;align-items:flex-end;justify-content:center;}
+#окноВосстановления[hidden]{display:none;}
+#окноВосстановления .лист{background:var(--бумага,#fff);color:var(--чернила,#222);width:100%;max-width:560px;
+  max-height:88dvh;overflow:auto;border-radius:20px 20px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow:0 -8px 40px rgba(0,0,0,.25);}
+@media (min-width:600px){#окноВосстановления{align-items:center}#окноВосстановления .лист{border-radius:20px}}
+#окноВосстановления h3{margin:0 0 4px;font-size:18px}
+#окноВосстановления h4{margin:16px 0 6px;font-size:14px}
+#окноВосстановления .тихо{color:var(--приглушённый,#678);font-size:13px;margin:0 0 8px}
+#окноВосстановления .копия{display:flex;gap:10px;align-items:center;border:1px solid var(--край,#dde);
+  border-radius:12px;padding:8px 10px;margin:6px 0;font-size:13px}
+#окноВосстановления .копия div{flex:1;min-width:0}
+#окноВосстановления .копия b{display:block;font-size:14px}
+#окноВосстановления button{min-height:40px;padding:6px 12px;border-radius:10px;border:1px solid var(--край,#ccd);
+  background:var(--панель,#f3f6f7);color:inherit;font:inherit;font-size:13px;cursor:pointer}
+#окноВосстановления button.главная{background:var(--акцент,#187e78);border-color:var(--акцент,#187e78);color:var(--на-акценте,#fff);font-weight:600}
+#окноВосстановления .снимки{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px;margin:6px 0 10px}
+#окноВосстановления .снимки img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;background:#ccc}
+#окноВосстановления .низ{display:flex;justify-content:flex-end;margin-top:14px}
+`;
+  document.head.appendChild(стиль);
+
+  const окно = document.createElement("div");
+  окно.id = "окноВосстановления";
+  окно.hidden = true;
+  окно.innerHTML = '<div class="лист" role="dialog" aria-label="Восстановить потерянное"></div>';
+  document.body.appendChild(окно);
+  const лист = окно.firstChild;
+  окно.addEventListener("click", e => { if (e.target === окно) закрыть(); });
+  function закрыть(){ окно.hidden = true; }
+
+  function когда(t){ try { return new Date(t).toLocaleString("ru-RU", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); } catch (e) { return ""; } }
+  function описание(ч){
+    const м = ч.м || [];
+    const фото = м.reduce((s, d) => s + ((d.photos || []).length), 0);
+    const замерено = м.filter(d => Object.values(d.attributes || {}).some(v => v !== null && v !== undefined && String(v).trim() !== "")).length;
+    return "маркеров " + м.length + " (с данными " + замерено + "), фото " + фото + ", линий " + ((ч.р || []).length);
+  }
+
+  // снимки, на которые не ссылается ни одна работа в телефоне
+  async function фотоБезМаркера(){
+    try { await ФОТО_ГОТОВО; } catch (e) {}
+    const нужные = new Set();
+    const добавить = м => { for (const d of (м || [])) for (const f of ((d && d.photos) || [])) if (f && f.id) нужные.add(String(f.id)); };
+    добавить(П.маркеры);
+    try { for (const с of вкладки) добавить(с && с.П && с.П.маркеры); } catch (e) {}
+    for (const с of всеЧерновики()) добавить(с.ч.м);
+    for (const с of резервныеКопии()) добавить(с.ч.м);
+    try { for (const з of await недавниеПодложки()) for (const id of (з.фото || [])) нужные.add(String(id)); } catch (e) {}
+    const out = [];
+    for (const [id, зап] of ФОТО) if (!нужные.has(String(id)) && зап && зап.data) out.push(id);
+    return out;
+  }
+
+  function вернутьКопию(ч){
+    if (!П.сырой) return сказать("Сначала откройте подложку");
+    const тот = корень(ч.имя) === корень(П.имя);
+    if (!confirm((тот ? "" : "Эта копия от другого объекта («" + ч.имя + "»).\n\n") +
+                 "Заменить маркеры открытой подложки копией от " + когда(ч.когда) + "?\n(" + описание(ч) +
+                 ")\n\nТекущие маркеры уйдут в резервную копию — их тоже можно будет вернуть.")) return;
+    запомнить();
+    if (П.маркеры.length)
+      отложитьВРезерв({имя: П.имя, когда: Date.now(), м: П.маркеры.map(m => маркерВ(m, false)),
+                       р: П.рисунок.map(штрихВ), п: П.помещения.map(помещениеВ), о: П.видыОтделки, т: П.типыТрасс});
+    П.маркеры = (ч.м || []).map(маркерИз);
+    if (Array.isArray(ч.р) && ч.р.length >= П.рисунок.length) П.рисунок = ч.р.map(штрихИз);
+    const пом = new Map((ч.п || []).map(d => [d.id, d]));
+    for (const r of П.помещения) {
+      const d = пом.get(r.id);
+      if (!d) continue;
+      r.finish_floor = String(d.finish_floor || "");
+      r.finish_ceiling = String(d.finish_ceiling || "");
+    }
+    for (const v of (ч.о || [])) try { запомнитьВидОтделки(v); } catch (e) {}
+    грязно = true;
+    обновитьВсё();
+    закрыть();
+    сказать("Возвращено маркеров: " + П.маркеры.length + ". Сразу сделайте «Экспортировать замеры»");
+  }
+
+  function поставитьФото(ids){
+    if (!П.сырой) return сказать("Сначала откройте подложку");
+    if (!ids.length) return;
+    запомнить();
+    const W = П.ширина || 2000, H = П.высота || 1400;
+    const кол = Math.ceil(Math.sqrt(ids.length));
+    const шаг = Math.min(W, H) * 0.5 / Math.max(1, кол);
+    const x0 = W * 0.25, y0 = H * 0.25;
+    ids.forEach((id, i) => {
+      const a = {}; for (const k of (ATTRS[T_NOTE] || [])) a[k] = null;
+      П.маркеры.push({id: случайныйId(), type: T_NOTE,
+        x: x0 + (i % кол) * шаг, y: y0 + Math.floor(i / кол) * шаг, x1: 0, y1: 0, x2: 0, y2: 0,
+        attributes: a, vor: null, photos: [{id: String(id), ann: []}]});
+    });
+    грязно = true;
+    обновитьВсё();
+    закрыть();
+    сказать("На план поставлено фотозаметок: " + ids.length + ". Перетащите их на место");
+  }
+
+  async function открыть(){
+    закрытьМеню();
+    лист.innerHTML = '<h3>Восстановить потерянное</h3><p class="тихо">Ищу в памяти телефона…</p>';
+    окно.hidden = false;
+    const копии = [...всеЧерновики().map(с => Object.assign({вид: "черновик"}, с)),
+                   ...резервныеКопии().map(с => Object.assign({вид: "резерв"}, с))]
+      .filter(с => (с.ч.м || []).length || (с.ч.р || []).length)
+      .sort((a, b) => {
+        const свой = с => П.сырой && корень(с.ч.имя) === корень(П.имя) ? 0 : 1;
+        return свой(a) - свой(b) || (b.ч.когда || 0) - (a.ч.когда || 0);
+      });
+    const сироты = await фотоБезМаркера();
+
+    лист.innerHTML = "";
+    const з = document.createElement("h3"); з.textContent = "Восстановить потерянное";
+    const п = document.createElement("p"); п.className = "тихо";
+    п.textContent = "Всё, что нашлось в памяти браузера на этом телефоне. После возврата сразу сделайте «Экспортировать замеры».";
+    лист.append(з, п);
+
+    const h1 = document.createElement("h4"); h1.textContent = "Копии работы (" + копии.length + ")";
+    лист.append(h1);
+    if (!копии.length) {
+      const н = document.createElement("p"); н.className = "тихо";
+      н.textContent = "Копий с маркерами нет. Новая версия начнёт их делать: при каждой потере маркеров прежнее состояние откладывается в резерв.";
+      лист.append(н);
+    }
+    for (const с of копии) {
+      const р = document.createElement("div"); р.className = "копия";
+      const т = document.createElement("div");
+      const и = document.createElement("b"); и.textContent = String(с.ч.имя || "").replace(/\.json$/i, "");
+      т.append(и, document.createTextNode((с.вид === "резерв" ? "резерв от " : "черновик от ") + когда(с.ч.когда) + " — " + описание(с.ч)));
+      const к = document.createElement("button"); к.textContent = "Вернуть";
+      к.onclick = () => вернутьКопию(с.ч);
+      р.append(т, к); лист.append(р);
+    }
+
+    const h2 = document.createElement("h4"); h2.textContent = "Фото без маркера (" + сироты.length + ")";
+    лист.append(h2);
+    if (сироты.length) {
+      const г = document.createElement("div"); г.className = "снимки";
+      for (const id of сироты.slice(0, 60)) {
+        const img = document.createElement("img"); img.alt = ""; img.loading = "lazy";
+        const зап = ФОТО.get(id); if (зап && зап.data) img.src = зап.data;
+        г.append(img);
+      }
+      const к = document.createElement("button"); к.className = "главная";
+      к.textContent = "Поставить " + сироты.length + " фото на план";
+      к.onclick = () => поставитьФото(сироты);
+      лист.append(г, к);
+    } else {
+      const н = document.createElement("p"); н.className = "тихо"; н.textContent = "Таких фото в памяти телефона нет.";
+      лист.append(н);
+    }
+    const низ = document.createElement("div"); низ.className = "низ";
+    const кз = document.createElement("button"); кз.textContent = "Закрыть"; кз.onclick = закрыть;
+    низ.append(кз); лист.append(низ);
+  }
+
+  // пункт меню — рядом с «Проверить фотографии…»
+  const меню = document.getElementById("меню");
+  if (меню) {
+    const b = document.createElement("button");
+    b.id = "кВосстановить";
+    b.innerHTML = (typeof ЗНАЧКИ !== "undefined" && (ЗНАЧКИ.отмена || ЗНАЧКИ.назад) ? (ЗНАЧКИ.отмена || ЗНАЧКИ.назад) : "") + "Восстановить потерянное…";
+    b.setAttribute("aria-label", "Восстановить потерянное");
+    b.onclick = открыть;
+    const рядом = [...меню.querySelectorAll("button")].find(x => /Проверить фотографии/.test(x.textContent));
+    if (рядом) рядом.after(b); else меню.prepend(b);
+  }
+  window.открытьВосстановление = открыть;
+})();
 </script>
 <script id="compact-ui">
 /* ================================================ Компактный вид для телефона
