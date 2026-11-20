@@ -2299,7 +2299,8 @@ async function добавитьФото(m, файлы){
     // Сам снимок, как его отдала камера, — без ужатия и с EXIF. В файл
     // он не идёт (десяток таких не увезёт мессенджер), а живёт в памяти
     // телефона рядом с ужатым: по нему можно перепроверить замер
-    положитьИсходник(id, файл);
+    // Исходник с камеры (3–5 МБ) больше не храним: он переполнял память
+    // телефона, и тогда переставали сохраняться черновик и сами снимки
     if(!m.photos) m.photos=[];
     m.photos.push({id, ann:[], исх});
     сколько++;
@@ -2348,7 +2349,12 @@ function бд(){
 async function положитьВБД(id, зап){
   const d=await бд();
   if(!d) return;
-  try{ d.transaction(БД_ХРАН, "readwrite").objectStore(БД_ХРАН).put(зап, id); }
+  try{
+    const т=d.transaction(БД_ХРАН, "readwrite");
+    т.objectStore(БД_ХРАН).put(зап, id);
+    т.oncomplete=()=>{ if(window.тревогаСнята) тревогаСнята("фото"); };
+    т.onerror=т.onabort=()=>{ if(window.тревогаПамяти) тревогаПамяти("фото"); };
+  }
   catch(e){ /* памяти нет — снимок всё равно уйдёт в файл */ }
 }
 async function положитьИсходник(id, файл){
@@ -7626,7 +7632,7 @@ $("кОтдать").onclick=отдатьФайл;
    делается один раз в конце. */
 const КЛЮЧ="вор.подложка.черновик";
 //: сколько объектов помним разом — дальше место в браузере не резиновое
-const ЧЕРНОВИКОВ=5;
+const ЧЕРНОВИКОВ=30;   // черновик — одни ссылки, места почти не занимает; 5 вытесняли живые объекты
 
 /* Имя объекта, общее для всех версий одного файла.
 
@@ -7686,6 +7692,8 @@ function резервныеКопии(){
   return out;
 }
 function отложитьВРезерв(ч){
+  // резерв — в историю журнала (IndexedDB), localStorage держим маленьким
+  if(window.журнал && журнал.вИсторию){ журнал.вИсторию(ч); return; }
   try{
     const к=корень(ч.имя);
     localStorage.setItem(КЛЮЧ_РЕЗЕРВА+":"+к+":"+(ч.когда||Date.now()), JSON.stringify(ч));
@@ -7718,7 +7726,8 @@ function сохранитьЧерновикИз(п){
     // кончится, выбросит их не спрашивая — и не факт, что старые
     for(const с of всеЧерновики().slice(ЧЕРНОВИКОВ))
       localStorage.removeItem(с.ключ);
-  }catch(e){ /* памяти нет — файл всё равно можно отдать вручную */ }
+    if(window.тревогаСнята) тревогаСнята("черновик");
+  }catch(e){ if(window.тревогаПамяти) тревогаПамяти("черновик"); }
 }
 function предложитьЧерновик(){
   const все=всеЧерновики();
@@ -9284,6 +9293,205 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
   navigator.serviceWorker.register("./sw.js").catch(function (e) { console.warn("SW:", e); });
 }
 </script>
+<script id="journal">
+/* ================================================ Журнал работы
+   Почему пропадали только что поставленные точки.
+   Черновик лежал только в localStorage. На iPhone эта память
+   (а) пишется на диск не сразу: если телефон сам выгрузит браузер, последние
+       минуты работы могут не дойти до диска;
+   (б) при переполнении молча перестаёт сохранять: ошибка глушилась, и
+       черновик застывал на последней удачной записи. Переполняли её
+       исходники снимков с камеры, по 3–5 МБ на каждое фото.
+
+   Что здесь сделано:
+   * каждое изменение плана через полсекунды пишется ещё и в IndexedDB
+     (отдельная база «вор.журнал»): там запись подтверждается, когда она
+     уже на диске. При сворачивании браузера запись идёт сразу;
+   * история: при каждом новом или убранном маркере и раз в 3 минуты
+     откладывается копия. Их видно в «Восстановить потерянное»;
+   * при открытии подложки берётся самый свежий черновик из двух мест;
+   * если сохранить не удалось, вверху появляется красная плашка, а не тишина;
+   * браузер просим не выбрасывать данные сайта (storage.persist).
+*/
+(function(){
+  "use strict";
+  const ИМЯ = "вор.журнал", ЧЕРН = "черновики", ИСТ = "история";
+  const ИСТОРИИ_НА_ОБЪЕКТ = 40;
+  const ЖУРНАЛ = new Map();            // корень → самый свежий черновик из базы
+
+  let _б = null;
+  function б(){
+    if (_б) return _б;
+    _б = new Promise(ok => {
+      let з;
+      try { з = indexedDB.open(ИМЯ, 1); } catch (e) { return ok(null); }
+      з.onupgradeneeded = () => {
+        const d = з.result;
+        if (!d.objectStoreNames.contains(ЧЕРН)) d.createObjectStore(ЧЕРН);
+        if (!d.objectStoreNames.contains(ИСТ)) d.createObjectStore(ИСТ);
+      };
+      з.onsuccess = () => { const d = з.result; d.onversionchange = () => d.close(); ok(d); };
+      з.onerror = () => ok(null);
+      з.onblocked = () => ok(null);
+    });
+    return _б;
+  }
+  function транзакция(d, хран, режим){
+    try { return d.transaction(хран, режим, {durability: "strict"}); }
+    catch (e) { return d.transaction(хран, режим); }
+  }
+  function всеЗаписи(хран){
+    return б().then(d => d && new Promise(ok => {
+      const out = [];
+      let к;
+      try { к = транзакция(d, хран, "readonly").objectStore(хран).openCursor(); } catch (e) { return ok(out); }
+      к.onsuccess = () => { const c = к.result; if (!c) return ok(out); out.push({ключ: c.key, ч: c.value}); c.continue(); };
+      к.onerror = () => ok(out);
+    })).then(r => r || []);
+  }
+
+  /* ---------- плашка «не сохраняется» */
+  const плашка = document.createElement("div");
+  плашка.id = "тревогаПамяти";
+  плашка.hidden = true;
+  плашка.setAttribute("role", "alert");
+  плашка.style.cssText = "position:fixed;left:8px;right:8px;top:calc(8px + env(safe-area-inset-top));z-index:10000;" +
+    "background:#b3261e;color:#fff;border-radius:12px;padding:10px 12px;font:600 14px/1.35 system-ui,sans-serif;" +
+    "box-shadow:0 6px 24px rgba(0,0,0,.3)";
+  document.body.appendChild(плашка);
+  плашка.onclick = () => { плашка.hidden = true; if (window.открытьВосстановление) открытьВосстановление(); };
+  const сбои = new Set();
+  window.тревогаПамяти = function(что){
+    сбои.add(что);
+    плашка.textContent = "⚠ Память телефона: не сохраняется " + [...сбои].join(", ") +
+      ". Сразу сделайте «⋯ → Экспортировать замеры». Нажмите сюда, чтобы освободить место.";
+    плашка.hidden = false;
+  };
+  window.тревогаСнята = function(что){
+    if (!сбои.delete(что)) return;
+    if (!сбои.size) плашка.hidden = true;
+  };
+
+  /* ---------- запись */
+  function снимок(п){
+    return {имя: п.имя, когда: Date.now(),
+      м: п.маркеры.map(m => маркерВ(m, false)), р: п.рисунок.map(штрихВ),
+      п: п.помещения.map(помещениеВ), о: п.видыОтделки, т: п.типыТрасс};
+  }
+  const последняя = new Map();         // корень → {n, t} последней копии в истории
+  async function записать(ч){
+    const d = await б();
+    if (!d) return false;
+    const к = корень(ч.имя);
+    ЖУРНАЛ.set(к, ч);
+    return new Promise(ok => {
+      let т;
+      try { т = транзакция(d, [ЧЕРН, ИСТ], "readwrite"); } catch (e) { return ok(false); }
+      т.objectStore(ЧЕРН).put(ч, к);
+      const n = (ч.м || []).length, пр = последняя.get(к);
+      if (!пр || n !== пр.n || ч.когда - пр.t > 180000) {
+        т.objectStore(ИСТ).put(ч, к + "|" + ч.когда);
+        последняя.set(к, {n, t: ч.когда});
+      }
+      т.oncomplete = () => ok(true);
+      т.onerror = т.onabort = () => ok(false);
+    });
+  }
+
+  const ждут = new Map();
+  let таймер = 0;
+  function сбросить(){
+    clearTimeout(таймер); таймер = 0;
+    const все = [...ждут.values()];
+    ждут.clear();
+    for (const п of все) {
+      let ч;
+      try { ч = снимок(п); } catch (e) { continue; }
+      записать(ч).then(ok => ok ? тревогаСнята("журнал") : тревогаПамяти("журнал"));
+    }
+  }
+  const исходное = сохранитьЧерновикИз;
+  сохранитьЧерновикИз = function(п){
+    исходное(п);
+    if (!п || !п.сырой) return;
+    ждут.set(корень(п.имя), п);
+    clearTimeout(таймер);
+    таймер = setTimeout(сбросить, 500);
+  };
+  // свернули браузер, переключились на камеру, пришёл звонок — пишем сразу
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") сбросить(); });
+  window.addEventListener("pagehide", сбросить);
+  window.addEventListener("blur", сбросить);
+
+  /* ---------- чтение: из двух черновиков берём свежий */
+  const черновикИзПамяти = черновикФайла;
+  черновикФайла = function(имя){
+    const а = черновикИзПамяти(имя), б2 = ЖУРНАЛ.get(корень(имя));
+    if (!а) return б2 || null;
+    if (б2 && (б2.когда || 0) > (а.когда || 0)) return б2;
+    return а;
+  };
+
+  /* ---------- при запуске: прочитать журнал, перенести старые резервы, прибраться */
+  const ГОТОВ = (async () => {
+    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
+    for (const {ч} of await всеЗаписи(ЧЕРН)) if (ч && ч.м) ЖУРНАЛ.set(корень(ч.имя), ч);
+    // резервы из localStorage — в историю базы: там им место, а
+    // localStorage остаётся маленьким и не переполняется
+    try {
+      const d = await б();
+      if (d) for (const с of резервныеКопии()) {
+        const ok = await new Promise(r => {
+          const т = транзакция(d, ИСТ, "readwrite");
+          т.objectStore(ИСТ).put(с.ч, корень(с.ч.имя) + "|" + (с.ч.когда || 0));
+          т.oncomplete = () => r(true); т.onerror = т.onabort = () => r(false);
+        });
+        if (ok) localStorage.removeItem(с.ключ);
+      }
+    } catch (e) {}
+    // история: по каждому объекту 40 последних и ещё самая полная
+    try {
+      const ист = await всеЗаписи(ИСТ), по = new Map();
+      for (const з of ист) { if (!з.ч) continue; const к = корень(з.ч.имя); if (!по.has(к)) по.set(к, []); по.get(к).push(з); }
+      const лишние = [];
+      for (const список of по.values()) {
+        список.sort((a, b) => (b.ч.когда || 0) - (a.ч.когда || 0));
+        let полная = список[0];
+        for (const з of список) if ((з.ч.м || []).length > (полная.ч.м || []).length) полная = з;
+        список.forEach((з, i) => { if (i >= ИСТОРИИ_НА_ОБЪЕКТ && з !== полная) лишние.push(з.ключ); });
+      }
+      if (лишние.length) {
+        const d = await б();
+        const т = транзакция(d, ИСТ, "readwrite");
+        for (const k of лишние) т.objectStore(ИСТ).delete(k);
+      }
+    } catch (e) {}
+    // памяти мало — предупредить заранее
+    try {
+      const о = navigator.storage && navigator.storage.estimate && await navigator.storage.estimate();
+      if (о && о.quota && о.usage / о.quota > 0.9) тревогаПамяти("скоро: память почти заполнена");
+    } catch (e) {}
+  })();
+
+  // подложку открываем только когда журнал прочитан — иначе возьмём старый черновик
+  const исходнаяЗагрузка = загрузить;
+  загрузить = async function(...а){
+    try { await Promise.race([ГОТОВ, new Promise(r => setTimeout(r, 4000))]); } catch (e) {}
+    return исходнаяЗагрузка.apply(this, а);
+  };
+
+  window.журнал = {
+    готов: ГОТОВ,
+    сбросить,
+    вИсторию: ч => б().then(d => {
+      if (!d) return;
+      try { транзакция(d, ИСТ, "readwrite").objectStore(ИСТ).put(ч, корень(ч.имя) + "|" + (ч.когда || Date.now())); } catch (e) {}
+    }),
+    история: async () => (await всеЗаписи(ИСТ)).map(з => з.ч).filter(ч => ч && ч.м),
+    черновики: () => [...ЖУРНАЛ.values()]
+  };
+})();
+</script>
 <script id="recovery">
 /* ================================================ Восстановить потерянное
    Пункт меню: показывает, что ещё лежит в памяти телефона, и возвращает это
@@ -9347,10 +9555,33 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
     try { for (const с of вкладки) добавить(с && с.П && с.П.маркеры); } catch (e) {}
     for (const с of всеЧерновики()) добавить(с.ч.м);
     for (const с of резервныеКопии()) добавить(с.ч.м);
-    try { for (const з of await недавниеПодложки()) for (const id of (з.фото || [])) нужные.add(String(id)); } catch (e) {}
+    try { if (window.журнал) { for (const ч of журнал.черновики()) добавить(ч.м); for (const ч of await журнал.история()) добавить(ч.м); } } catch (e) {}
+    // у недавней подложки считаем только снимки маркеров в самом файле:
+    // список «фото» карточки пишется из текущей работы и прятал бы потерянные
+    try { for (const з of await недавниеПодложки()) { try { добавить((JSON.parse(з.текст || "{}").markers) || []); } catch (e) {} } } catch (e) {}
     const out = [];
     for (const [id, зап] of ФОТО) if (!нужные.has(String(id)) && зап && зап.data) out.push(id);
     return out;
+  }
+
+  // исходники снимков с камеры: полноразмерные дубли, которые и переполняли память
+  async function сколькоИсходников(){
+    try {
+      const d = await бд();
+      if (!d || !d.objectStoreNames.contains(БД_ИСХ)) return {n: 0, мб: 0};
+      return await new Promise(ok => {
+        let n = 0, байт = 0;
+        const к = d.transaction(БД_ИСХ, "readonly").objectStore(БД_ИСХ).openCursor();
+        к.onsuccess = () => { const c = к.result; if (!c) return ok({n, мб: Math.round(байт / 1048576)}); n++; байт += (c.value && c.value.size) || 0; c.continue(); };
+        к.onerror = () => ok({n, мб: Math.round(байт / 1048576)});
+      });
+    } catch (e) { return {n: 0, мб: 0}; }
+  }
+  async function удалитьИсходники(){
+    try {
+      const d = await бд();
+      await new Promise(ok => { const т = d.transaction(БД_ИСХ, "readwrite"); т.objectStore(БД_ИСХ).clear(); т.oncomplete = т.onerror = т.onabort = ok; });
+    } catch (e) {}
   }
 
   function вернутьКопию(ч){
@@ -9403,13 +9634,33 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
     закрытьМеню();
     лист.innerHTML = '<h3>Восстановить потерянное</h3><p class="тихо">Ищу в памяти телефона…</p>';
     окно.hidden = false;
+    try { if (window.журнал) await журнал.готов; } catch (e) {}
+    let история = [];
+    try { if (window.журнал) история = await журнал.история(); } catch (e) {}
+    const видели = new Set();
     const копии = [...всеЧерновики().map(с => Object.assign({вид: "черновик"}, с)),
-                   ...резервныеКопии().map(с => Object.assign({вид: "резерв"}, с))]
+                   ...(window.журнал ? журнал.черновики() : []).map(ч => ({вид: "черновик", ч})),
+                   ...резервныеКопии().map(с => Object.assign({вид: "резерв"}, с)),
+                   ...история.map(ч => ({вид: "копия", ч}))]
       .filter(с => (с.ч.м || []).length || (с.ч.р || []).length)
+      .filter(с => { const k = корень(с.ч.имя) + "|" + (с.ч.когда || 0); if (видели.has(k)) return false; видели.add(k); return true; })
       .sort((a, b) => {
         const свой = с => П.сырой && корень(с.ч.имя) === корень(П.имя) ? 0 : 1;
         return свой(a) - свой(b) || (b.ч.когда || 0) - (a.ч.когда || 0);
       });
+    // копий может быть много: по каждому объекту 12 последних и самая полная
+    {
+      const по = new Map();
+      for (const с of копии) { const к = корень(с.ч.имя); if (!по.has(к)) по.set(к, []); по.get(к).push(с); }
+      const оставить = new Set();
+      for (const список of по.values()) {
+        let полная = список[0];
+        for (const с of список) if ((с.ч.м || []).length > (полная.ч.м || []).length) полная = с;
+        список.slice(0, 12).forEach(с => оставить.add(с));
+        оставить.add(полная);
+      }
+      for (let i = копии.length - 1; i >= 0; i--) if (!оставить.has(копии[i])) копии.splice(i, 1);
+    }
     const сироты = await фотоБезМаркера();
 
     лист.innerHTML = "";
@@ -9429,7 +9680,7 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
       const р = document.createElement("div"); р.className = "копия";
       const т = document.createElement("div");
       const и = document.createElement("b"); и.textContent = String(с.ч.имя || "").replace(/\.json$/i, "");
-      т.append(и, document.createTextNode((с.вид === "резерв" ? "резерв от " : "черновик от ") + когда(с.ч.когда) + " — " + описание(с.ч)));
+      т.append(и, document.createTextNode(с.вид + " от " + когда(с.ч.когда) + " — " + описание(с.ч)));
       const к = document.createElement("button"); к.textContent = "Вернуть";
       к.onclick = () => вернутьКопию(с.ч);
       р.append(т, к); лист.append(р);
@@ -9452,6 +9703,33 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
       const н = document.createElement("p"); н.className = "тихо"; н.textContent = "Таких фото в памяти телефона нет.";
       лист.append(н);
     }
+    // память телефона и офлайн-копия
+    const h3 = document.createElement("h4"); h3.textContent = "Память и работа без интернета";
+    const инфо = document.createElement("p"); инфо.className = "тихо";
+    лист.append(h3, инфо);
+    const строки = [];
+    try {
+      const о = navigator.storage && navigator.storage.estimate && await navigator.storage.estimate();
+      if (о && о.quota) строки.push("Занято " + Math.round(о.usage / 1048576) + " МБ из " + Math.round(о.quota / 1048576) + " МБ.");
+    } catch (e) {}
+    try { if (navigator.storage && navigator.storage.persisted) строки.push(await navigator.storage.persisted() ? "Браузер обещал не стирать данные сайта." : "Браузер может стереть данные сайта, если места мало — делайте экспорт."); } catch (e) {}
+    строки.push(!("serviceWorker" in navigator) ? "Этот браузер не умеет открывать сайт без интернета: не закрывайте вкладку на объекте."
+      : navigator.serviceWorker.controller ? "Офлайн-копия приложения есть: откроется и без интернета."
+      : "Офлайн-копии пока нет: откройте приложение ещё раз при интернете.");
+    инфо.textContent = строки.join(" ");
+    const исх = await сколькоИсходников();
+    if (исх.n) {
+      const к = document.createElement("button");
+      к.textContent = "Освободить место: удалить исходники с камеры (" + исх.n + " шт., ~" + исх.мб + " МБ)";
+      к.onclick = async () => {
+        if (!confirm("Удалить " + исх.n + " исходных снимков с камеры (~" + исх.мб + " МБ)?\n\nСами фото на плане останутся: это лишние полноразмерные копии, они переполняли память. Вернуть их будет нельзя.")) return;
+        await удалитьИсходники();
+        сказать("Место освобождено");
+        открыть();
+      };
+      лист.append(к);
+    }
+
     const низ = document.createElement("div"); низ.className = "низ";
     const кз = document.createElement("button"); кз.textContent = "Закрыть"; кз.onclick = закрыть;
     низ.append(кз); лист.append(низ);
