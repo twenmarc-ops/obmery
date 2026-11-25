@@ -9350,27 +9350,13 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
     })).then(r => r || []);
   }
 
-  /* ---------- плашка «не сохраняется» */
-  const плашка = document.createElement("div");
-  плашка.id = "тревогаПамяти";
-  плашка.hidden = true;
-  плашка.setAttribute("role", "alert");
-  плашка.style.cssText = "position:fixed;left:8px;right:8px;top:calc(8px + env(safe-area-inset-top));z-index:10000;" +
-    "background:#b3261e;color:#fff;border-radius:12px;padding:10px 12px;font:600 14px/1.35 system-ui,sans-serif;" +
-    "box-shadow:0 6px 24px rgba(0,0,0,.3)";
-  document.body.appendChild(плашка);
-  плашка.onclick = () => { плашка.hidden = true; if (window.открытьВосстановление) открытьВосстановление(); };
+  /* ---------- сбои записи: без плашек, только отметка.
+     Красная плашка мешала работать, поэтому её больше нет. Что не
+     сохраняется, видно в «⋯ → Восстановить потерянное», раздел «Память». */
   const сбои = new Set();
-  window.тревогаПамяти = function(что){
-    сбои.add(что);
-    плашка.textContent = "⚠ Память телефона: не сохраняется " + [...сбои].join(", ") +
-      ". Сразу сделайте «⋯ → Экспортировать замеры». Нажмите сюда, чтобы освободить место.";
-    плашка.hidden = false;
-  };
-  window.тревогаСнята = function(что){
-    if (!сбои.delete(что)) return;
-    if (!сбои.size) плашка.hidden = true;
-  };
+  window.сбоиПамяти = сбои;
+  window.тревогаПамяти = function(что){ сбои.add(что); };
+  window.тревогаСнята = function(что){ сбои.delete(что); };
 
   /* ---------- запись */
   function снимок(п){
@@ -9700,6 +9686,16 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
         const свой = с => П.сырой && корень(с.ч.имя) === корень(П.имя) ? 0 : 1;
         return свой(a) - свой(b) || (b.ч.когда || 0) - (a.ч.когда || 0);
       });
+    // черновик у объекта один — самый свежий (их два места хранения, и
+    // в списке выходили две одинаковые строки)
+    {
+      const есть = new Set();
+      for (let i = 0; i < копии.length; i++) {
+        if (копии[i].вид !== "черновик") continue;
+        const к = корень(копии[i].ч.имя);
+        if (есть.has(к)) { копии.splice(i, 1); i--; } else есть.add(к);
+      }
+    }
     // копий может быть много: по каждому объекту 12 последних и самая полная
     {
       const по = new Map();
@@ -9720,6 +9716,31 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
     const п = document.createElement("p"); п.className = "тихо";
     п.textContent = "Всё, что нашлось в памяти браузера на этом телефоне. После возврата сразу сделайте «Экспортировать замеры».";
     лист.append(з, п);
+
+    // память переполнена — говорим здесь, первым делом, и сразу даём кнопку
+    const исх = await сколькоИсходников();
+    const сбои = window.сбоиПамяти ? [...window.сбоиПамяти] : [];
+    if (сбои.length || исх.n) {
+      const б = document.createElement("div"); б.className = "копия";
+      const т = document.createElement("div");
+      const и = document.createElement("b");
+      и.textContent = сбои.length ? "⚠ Память телефона переполнена" : "Можно освободить место";
+      т.append(и, document.createTextNode((сбои.length ? "Новые фото и копии работы могут не сохраняться. " : "") +
+        (исх.n ? "Лишние полноразмерные копии фото с камеры: " + исх.n + " шт., ~" + исх.мб + " МБ. Фото на плане останутся." : "Сделайте «Экспортировать замеры».")));
+      б.append(т);
+      if (исх.n) {
+        const к = document.createElement("button"); к.className = "главная"; к.textContent = "Освободить";
+        к.onclick = async () => {
+          if (!confirm("Удалить " + исх.n + " полноразмерных копий фото с камеры (~" + исх.мб + " МБ)?\n\nСами фото на плане останутся. Вернуть копии будет нельзя.")) return;
+          await удалитьИсходники();
+          if (window.сбоиПамяти) window.сбоиПамяти.clear();
+          сказать("Место освобождено");
+          открыть();
+        };
+        б.append(к);
+      }
+      лист.append(б);
+    }
 
     const h1 = document.createElement("h4"); h1.textContent = "Копии работы (" + копии.length + ")";
     лист.append(h1);
@@ -9769,18 +9790,6 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
       : navigator.serviceWorker.controller ? "Офлайн-копия приложения есть: откроется и без интернета."
       : "Офлайн-копии пока нет: откройте приложение ещё раз при интернете.");
     инфо.textContent = строки.join(" ");
-    const исх = await сколькоИсходников();
-    if (исх.n) {
-      const к = document.createElement("button");
-      к.textContent = "Освободить место: удалить исходники с камеры (" + исх.n + " шт., ~" + исх.мб + " МБ)";
-      к.onclick = async () => {
-        if (!confirm("Удалить " + исх.n + " исходных снимков с камеры (~" + исх.мб + " МБ)?\n\nСами фото на плане останутся: это лишние полноразмерные копии, они переполняли память. Вернуть их будет нельзя.")) return;
-        await удалитьИсходники();
-        сказать("Место освобождено");
-        открыть();
-      };
-      лист.append(к);
-    }
 
     const низ = document.createElement("div"); низ.className = "низ";
     const кз = document.createElement("button"); кз.textContent = "Закрыть"; кз.onclick = закрыть;
@@ -9953,91 +9962,6 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
     const m = П.маркеры[П.маркеры.length - 1];
     if (m && m.type === T_DIM) открытьШторку(m);
     return r;
-  };
-})();
-</script>
-<script id="shtroba">
-/* ================================================ Штроба
-   Отдельный маркер: длина, ширина, глубина штробы и что в ней.
-
-   Длину вертикальной штробы удобно брать косвенным режимом GLM
-   «двойная косвенная высота»: с одного места наводимся на низ и на верх,
-   прибор сам считает расстояние между точками по углу наклона.
-   В этом режиме прибор может прислать по Bluetooth и промежуточные
-   выстрелы, и итог. Поэтому в поле «Длина штробы» каждый новый выстрел
-   ЗАМЕНЯЕТ прежний, а курсор не уходит дальше: остаётся последнее, то
-   есть итог прибора. К ширине и глубине переходят касанием поля.
-*/
-(function(){
-  "use strict";
-  const T = "Штроба", КОСВ = "Длина штробы";
-  window.T_SHTROBA = T;
-  ATTRS[T] = [КОСВ, "Ширина штробы", "Глубина штробы", "Текст"];
-  ЦВЕТА[T] = "#d81b60";
-  КОРОТКО[T] = "ШТ";
-  // вертикальная канавка в стене со стрелками длины
-  КОНТУРЫ_МАРКЕРОВ[T] = "M-2 -7V7 M2 -7V7 M-6 -7H6 M-6 7H6 M-5 -3L-5 3 M-6 -2L-5 -3L-4 -2 M-6 2L-5 3L-4 2";
-  if (!СО_СНИМКАМИ.includes(T)) СО_СНИМКАМИ.push(T);
-
-  const ЗНАЧОК = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M10 3v18M14 3v18M6 3h12M6 21h12"/><path d="M4 8v8M3 9l1-1 1 1M3 15l1 1 1-1"/><path d="M17 12h3" stroke-dasharray="1.5 1.5"/></svg>';
-
-  // кнопка на панели — сразу после «Ниша»
-  const ряд = document.getElementById("рядМерить");
-  if (ряд && !ряд.querySelector('[data-код="' + T + '"]')) {
-    const b = document.createElement("button");
-    b.innerHTML = ЗНАЧОК + '<span class="имя">Штроба</span>';
-    b.dataset.код = T;
-    b.title = "Штроба"; b.setAttribute("aria-label", "Штроба"); b.setAttribute("aria-pressed", "false");
-    b.onclick = () => выбратьИнструмент(T);
-    const ниша = ряд.querySelector('[data-код="' + T_NICHE + '"]');
-    if (ниша) ниша.after(b); else ряд.appendChild(b);
-  }
-
-  // подсказка в шторке штробы
-  const подсказка = document.createElement("div");
-  подсказка.id = "подсказкаШтробы";
-  подсказка.hidden = true;
-  подсказка.style.cssText = "font-size:13px;line-height:1.35;color:var(--приглушённый,#678);background:var(--акцент-слабо,#e7f3f2);" +
-    "border-radius:10px;padding:8px 10px;margin:6px 0";
-  подсказка.innerHTML = "<b>Длина — косвенным режимом GLM.</b> На дальномере: <b>Func → «двойная косвенная высота»</b>. " +
-    "С одного места наведитесь на низ штробы, потом на верх. В поле остаётся последнее значение — итог прибора. " +
-    "Годится для вертикальной штробы; горизонтальную меряйте напрямую.";
-  const поля = document.getElementById("шторкаПоля");
-  if (поля) поля.before(подсказка);
-  function показатьПодсказку(){ подсказка.hidden = !(текущий && текущий.type === T); }
-
-  const исхОткрыть = открытьШторку;
-  открытьШторку = function(m){
-    const r = исхОткрыть.apply(this, arguments);
-    показатьПодсказку();
-    return r;
-  };
-  const исхЗакрыть = закрытьШторку;
-  закрытьШторку = function(){
-    const r = исхЗакрыть.apply(this, arguments);
-    подсказка.hidden = true;
-    return r;
-  };
-
-  // новая штроба сразу открыта под выстрел
-  const исхТочка = поставитьТочку;
-  поставитьТочку = function(тип, x, y, молча){
-    const m = исхТочка.apply(this, arguments);
-    if (тип === T && m && !молча) открытьШторку(m);
-    return m;
-  };
-
-  // выстрел в «Длину штробы»: заменяет прежний и курсор не уводит
-  const исхЗамер = положитьЗамер;
-  положитьЗамер = function(метры){
-    if (!(текущий && текущий.type === T && активноеПоле === КОСВ && черновикЗначений) || (фотоЗапись && приёмФото))
-      return исхЗамер(метры);
-    const мм = Math.round(метры * 1000);
-    try { журнал("замер " + мм + " мм (штроба, последний выстрел)"); } catch (e) {}
-    черновикЗначений[КОСВ] = String(мм);
-    обновитьПоля();
-    сказать(мм + " мм → длина штробы. Следующий выстрел заменит это значение");
   };
 })();
 </script>
